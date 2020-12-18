@@ -1,0 +1,29 @@
+<IfModule Litespeed>
+    RewriteEngine On
+    RewriteRule .* - [E=noconntimeout:1]
+    RewriteRule .* - [E=noabort:1]
+</IfModule>
+
+php_flag  display_startup_errors on
+php_flag  display_errors on
+php_flag  html_errors on
+php_flag  log_errors on
+php_value max_input_time -1
+php_value max_execution_time 0
+#php_value memory_limit 256M
+#php_value upload_max_filesize 64M
+#php_value post_max_size 64M
+#php_value max_input_time 1000
+#php_value error_log  /home/u176105864/domains/webwarp.com/public_html/base/PHP_errors.log
+
+SecFilterEngine   Off
+SecFilterScanPOST Off
+
+RewriteEngine on
+RewriteRule .* - [E=noconntimeout:1]
+RewriteRule .* - [E=noabort:1]
+#RewriteCond %{HTTPS} off
+#RewriteCond %{HTTP_HOST} (www\.)?tab.webwarp.com
+#RewriteRule (.*) https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+Header always set Content-Security-Policy: upgrade-insecure-requests
