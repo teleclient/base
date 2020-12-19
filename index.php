@@ -177,7 +177,11 @@ function sendAndDelete(EventHandler $mp, int $dest, string $text, int $delaysecs
 
 function getExecutionMethod(): string
 {
-    return PHP_SAPI === 'cli' ? (isset($_SERVER['TERM']) ? 'Shell' : 'Cron') : 'Web';
+    if (PHP_OS_FAMILY === "Windows") {
+        return PHP_SAPI === 'cli' ? (isset($_SERVER['TERM']) ? 'Shell' : 'CMD') : 'Web';
+    } elseif (PHP_OS_FAMILY === "Linux") {
+        return PHP_SAPI === 'cli' ? (isset($_SERVER['TERM']) ? 'Shell' : 'Cron') : 'Web';
+    }
 }
 function getWebServerName(): ?string
 {
@@ -427,7 +431,7 @@ class EventHandler extends MadelineEventHandler
         $verb    = $command['verb'] ?? null;
         $params  = $command['params'];
 
-        // Recognize and log old or new commands.
+        // Recognize and log old or new commands and reactions.
         if ($byRobot && $toRobot && $msgType === 'updateNewMessage') {
             $msgDate = $update['message']['date'];
             $moment  = time();
@@ -444,8 +448,15 @@ class EventHandler extends MadelineEventHandler
         }
 
         // Start the Command Processing Engine
-        //$criteria = ['by_robot' => $byRobot, 'to_robot' => $toRobot, 'process' => $this->processCommands, 'message' => $msgOrig];
-        //$this->logger(toJSON($criteria, false), Logger::ERROR);
+        if ($byRobot || $toRobot) {
+            $criteria = ['by_robot' => $byRobot, 'to_robot' => $toRobot, 'process' => $this->processCommands];
+            if ($verb && $verb !== '') {
+                $criteria['action'] = $msgOrig;
+            } else {
+                $criteria['reaction'] = mb_substr($msgOrig, 0, 60);
+            }
+            $this->logger(toJSON($criteria, false), Logger::ERROR);
+        }
         if (
             !$this->processCommands &&
             $byRobot && $toRobot && $msgType === 'updateNewMessage' &&
