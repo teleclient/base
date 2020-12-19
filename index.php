@@ -9,7 +9,7 @@ ini_set('ignore_repeated_errors', '1');               // always TRUE
 ini_set('display_startup_errors', '1');
 ini_set('display_errors',         '1');               // FALSE only in production or real server
 ini_set('log_errors',             '1');               // Error logging engine
-ini_set('error_log',              'MadelineProto.log');  // Logging file path
+ini_set('error_log',              'php_errors.log');  // Logging file path
 
 if (!\file_exists('madeline.php')) {
     \copy('https://phar.madelineproto.xyz/madeline.php', 'madeline.php');
@@ -19,6 +19,7 @@ require 'madeline.php';
 define("ROBOT_NAME",   'Base');
 define('SESSION_FILE', 'session.madeline');
 define('SERVER_NAME',  '');
+define('SAPI_NAME', (PHP_SAPI === 'cli') ? (isset($_SERVER['TERM']) ? 'Shell' : 'Cron') : 'Web');
 
 use \danog\MadelineProto\EventHandler as MadelineEventHandler;
 use \danog\MadelineProto\Logger;
@@ -172,6 +173,19 @@ function sendAndDelete(EventHandler $mp, int $dest, string $text, int $delaysecs
             }
         })());
     }
+}
+
+function getExecutionMethod(): string
+{
+    return PHP_SAPI === 'cli' ? (isset($_SERVER['TERM']) ? 'Shell' : 'Cron') : 'Web';
+}
+function getWebServerName(): ?string
+{
+    return $_SERVER['SERVER_NAME'] ?? null;
+}
+function setWebServerName(string $serverName): void
+{
+    $_SERVER['SERVER_NAME'] = $serverName;
 }
 
 function safeStartAndLoop(API $MadelineProto, GenericLoop $genLoop = null, int $maxRecycles = 10): void
@@ -418,12 +432,20 @@ class EventHandler extends MadelineEventHandler
             $new     = $diff <= $this->oldAge;
             if ($verb && $verb !== '') {
                 $age = $new ? 'New' : 'Old';
-                yield $this->logger("$age Command:{verb:'$verb', time:" . date('H:i:s', $msgDate) . ", now:" . date('H:i:s', $moment) . ", age:$diff}", Logger::ERROR);
+                yield $this->logger(
+                    "$age Command:{verb:'$verb', time:" . date('H:i:s', $msgDate) .
+                        ", now:" . date('H:i:s', $moment) . ", age:$diff}",
+                    Logger::ERROR
+                );
             }
         }
 
         // Start the Command Processing Engine
-        if ($byRobot && $toRobot && $msgType === 'updateNewMessage' && !$this->processCommands && strStartsWith($msgOrig, ROBOT_NAME . ' started at ')) {
+        if (
+            $byRobot && $toRobot && $msgType === 'updateNewMessage' &&
+            !$this->processCommands &&
+            strStartsWith($msgOrig, ROBOT_NAME . ' started at ')
+        ) {
             $diff = time() - $update['message']['date'];
             if ($diff <= $this->oldAge) {
                 $this->processCommands = true;
@@ -476,6 +498,8 @@ class EventHandler extends MadelineEventHandler
                     $stats .= 'Updates: '  . $this->updatesProcessed . PHP_EOL;
                     $stats .= 'Loop State: ' . ($this->getLoopState() ? 'ON' : 'OFF') . PHP_EOL;
                     $stats .= 'Notification: ' . $notif . PHP_EOL;
+                    $stats .= 'Execution Method: ' . getExecutionMethod() . PHP_EOL;
+                    //$this->echo(toJSON($peer, false));
                     yield $this->messages->editMessage([
                         'peer'    => $peer,
                         'id'      => $messageId,
@@ -581,32 +605,7 @@ class EventHandler extends MadelineEventHandler
     } // end of function
 } // end of the class
 
-function getRunMethod(): string
-{
-    if (php_sapi_name() === 'cli') {
-        if (isset($_SERVER['TERM'])) {
-            $runsOn = "Shell";
-            //echo "The script was run from a manual invocation on a shell" . PHP_EOL;
-        } else {
-            $runsOn = "Cron";
-            //echo "The script was run from the crontab entry" . PHP_EOL;
-        }
-    } else {
-        $runsOn = "Web";
-        //echo "The script was run from a webserver, or something else.<br>" . PHP_EOL;
-    }
-    return $runsOn;
-}
-function getWebServerName(): string
-{
-    return $_SERVER['SERVER_NAME'] ?? null;
-}
-function setWebServerName(string $serverName): void
-{
-    $_SERVER['SERVER_NAME'] = $serverName;
-}
-$msg = "Trying to execute the script using " . getRunMethod() . " / '" . getWebServerName() . "' at " . date('d H:i:s') . "!";
-echo ($msg . PHP_EOL);
+$msg = "Trying to execute the script using " . getExecutionMethod() . " / '" . getWebServerName() . "' at " . date('d H:i:s') . "!";
 error_log($msg);
 
 if (PHP_SAPI !== 'cli' && !getWebServerName()) {
@@ -618,12 +617,12 @@ if (PHP_SAPI !== 'cli' && !getWebServerName()) {
 
 $settings['logger']['logger_level'] = Logger::ERROR;
 $settings['logger']['logger']       = Logger::FILE_LOGGER;
-$settings['logger']['logger_param'] = 'MadelineProto.log';
+//$settings['logger']['logger_param'] = 'MadelineProto.log';
 $settings['peer']['full_info_cache_time'] = 60;
 $settings['serialization']['cleanup_before_serialization'] = true;
 $settings['serialization']['serialization_interval'] = 60;
 $settings['app_info']['app_version']    = ROBOT_NAME;
-$settings['app_info']['system_version'] = 'WEB393';
+$settings['app_info']['system_version'] =  hostname() . getExecutionMethod();
 $madelineProto = new API(SESSION_FILE, $settings);
 $madelineProto->async(true);
 
@@ -659,10 +658,11 @@ $tempId    = Shutdown::addCallback(
     static function () use ($madelineProto, $robotName, $startTime) {
         $now      = time();
         $duration = $now - $startTime;
+        $msg = $robotName . " stopped at " . date("d H:i:s", $now) . "!  Execution duration:" . gmdate('H:i:s', $duration);
         if ($madelineProto) {
-            $madelineProto->logger($robotName . " stopped at " . date("d H:i:s", $now) . "!  Execution duration:" . gmdate('H:i:s', $duration), Logger::ERROR);
+            $madelineProto->logger($msg, Logger::ERROR);
         } else {
-            Logger::log($robotName . " stopped at " . date("d H:i:s", $now) . "!  Execution duration:" . gmdate('H:i:s', $duration), Logger::ERROR);
+            Logger::log($msg, Logger::ERROR);
         }
     },
     'duration'
@@ -671,4 +671,4 @@ $tempId    = Shutdown::addCallback(
 $maxRecycles = 5;
 safeStartAndLoop($madelineProto, $genLoop, $maxRecycles);
 
-exit('Finished');
+exit(PHP_EOL . 'Finished' . PHP_EOL);
