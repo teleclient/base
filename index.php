@@ -265,6 +265,7 @@ class EventHandler extends MadelineEventHandler
 
     private $robotID;     // id of the account which registered this app.
     private $owner;       // id or username of the owner of the robot.
+    private $officeID;    // id of the office channel;
     private $admins;      // ids of the accounts which heave admin rights.
     private $reportPeers; // ids of the support people who will receive the errors.
 
@@ -418,6 +419,8 @@ class EventHandler extends MadelineEventHandler
         $byRobot      = $fromId    === $this->robotID && $msg;
         $toRobot      = $peerType  === 'peerUser' && $peer['user_id'] === $this->robotID && $msg;
         $replyToRobot = $replyToId === $this->robotID && $msg;
+        $fromOffice   = null;
+        $toOffice     = null;
         $this->updatesProcessed += 1;
 
         $command = parseCommand($msgOrig);
@@ -441,9 +444,11 @@ class EventHandler extends MadelineEventHandler
         }
 
         // Start the Command Processing Engine
+        //$criteria = ['by_robot' => $byRobot, 'to_robot' => $toRobot, 'process' => $this->processCommands, 'message' => $msgOrig];
+        //$this->logger(toJSON($criteria, false), Logger::ERROR);
         if (
-            $byRobot && $toRobot && $msgType === 'updateNewMessage' &&
             !$this->processCommands &&
+            $byRobot && $toRobot && $msgType === 'updateNewMessage' &&
             strStartsWith($msgOrig, ROBOT_NAME . ' started at ')
         ) {
             $diff = time() - $update['message']['date'];
