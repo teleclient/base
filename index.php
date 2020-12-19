@@ -400,6 +400,7 @@ class EventHandler extends MadelineEventHandler
     }
     public function onUpdateNewMessage($update)
     {
+        $moment = time();
         if (
             $update['message']['_'] === 'messageService' ||
             $update['message']['_'] === 'messageEmpty'
@@ -413,6 +414,7 @@ class EventHandler extends MadelineEventHandler
         }
         $msgType      = $update['_'];
         $msgOrig      = $update['message']['message'] ?? null;
+        $msgDate      = $update['message']['date'] ?? null;
         $msg          = $msgOrig ? strtolower($msgOrig) : null;
         $messageId    = $update['message']['id'] ?? 0;
         $fromId       = $update['message']['from_id'] ?? 0;
@@ -433,8 +435,6 @@ class EventHandler extends MadelineEventHandler
 
         // Recognize and log old or new commands and reactions.
         if ($byRobot && $toRobot && $msgType === 'updateNewMessage') {
-            $msgDate = $update['message']['date'];
-            $moment  = time();
             $diff    = $moment - $msgDate;
             $new     = $diff <= $this->oldAge;
             if ($verb && $verb !== '') {
@@ -447,7 +447,7 @@ class EventHandler extends MadelineEventHandler
             }
         }
 
-        // Start the Command Processing Engine
+        // Log some information for debugging
         if ($byRobot || $toRobot) {
             $criteria = ['by_robot' => $byRobot, 'to_robot' => $toRobot, 'process' => $this->processCommands];
             if ($verb && $verb !== '') {
@@ -457,12 +457,14 @@ class EventHandler extends MadelineEventHandler
             }
             $this->logger(toJSON($criteria, false), Logger::ERROR);
         }
+
+        // Start the Command Processing Engine
         if (
             !$this->processCommands &&
             $byRobot && $toRobot && $msgType === 'updateNewMessage' &&
             strStartsWith($msgOrig, ROBOT_NAME . ' started at ')
         ) {
-            $diff = time() - $update['message']['date'];
+            $diff = $moment - $msgDate;
             if ($diff <= $this->oldAge) {
                 $this->processCommands = true;
                 yield $this->logger('Command-Processing engine started at ' . date('H:i:s', $moment), Logger::ERROR);
