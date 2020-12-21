@@ -1,5 +1,7 @@
 <?php
 
+// Ask your questions in the MadelineProto [FA] support group.
+
 declare(strict_types=1);
 date_default_timezone_set('Asia/Tehran');
 ignore_user_abort(true);
@@ -750,7 +752,7 @@ if (!file_exists('data/startups.txt')) {
     fclose($handle);
 }
 
-//$settings['logger']['logger_level'] = Logger::ERROR;
+$settings['logger']['logger_level'] = Logger::ERROR;
 $settings['logger']['logger'] = Logger::FILE_LOGGER;
 $settings['peer']['full_info_cache_time'] = 60;
 $settings['serialization']['cleanup_before_serialization'] = true;
