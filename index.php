@@ -9,14 +9,15 @@ ini_set('ignore_repeated_errors', '1');               // always TRUE
 ini_set('display_startup_errors', '1');
 ini_set('display_errors',         '1');               // FALSE only in production or real server
 ini_set('log_errors',             '1');               // Error logging engine
-ini_set('error_log',              'php_errors.log');  // Logging file path
+ini_set('error_log',              'MadelineProto.log');  // Logging file path
 
 if (!\file_exists('madeline.php')) {
     \copy('https://phar.madelineproto.xyz/madeline.php', 'madeline.php');
 }
 require 'madeline.php';
 
-define("ROBOT_NAME",   'Base');
+define("ROBOT_NAME",    'Base');
+define("ROBOT_VERSION", 'V1.1.0');
 define('SESSION_FILE', 'session.madeline');
 define('SERVER_NAME',  '');
 define('SAPI_NAME', (PHP_SAPI === 'cli') ? (isset($_SERVER['TERM']) ? 'Shell' : 'Cron') : 'Web');
@@ -66,11 +67,11 @@ function getMemUsage($peak = false): string
     if ($memUsage === 0) {
         $memUsage = '_UNAVAILABLE_';
     } elseif ($memUsage < 1024) {
-        $memUsage .= ' bytes';
+        $memUsage .= 'B';
     } elseif ($memUsage < 1048576) {
-        $memUsage = round($memUsage / 1024, 2) . ' kilobytes';
+        $memUsage = round($memUsage / 1024, 2) . 'K';
     } else {
-        $memUsage = round($memUsage / 1048576, 2) . ' megabytes';
+        $memUsage = round($memUsage / 1048576, 2) . 'M';
     }
     return $memUsage;
 }
@@ -126,20 +127,20 @@ function strStartsWith($haystack, $needle, $caseSensitive = true)
     return false;
 }
 
-function secondsToNexMinute(): int
+function secondsToNexMinute($now = null): int
 {
-    $now  = time();
-    $next = (int)ceil($now / 60) * 60;
+    $now   = $now ?? time();
+    $next  = (int)ceil($now / 60) * 60;
     $delay = $next - $now;
     return $delay > 0 ? $delay : 60;
 }
 
 function parseCommand(string $msg, string $prefixes = '!/', int $maxParams = 3): array
 {
-    $command = ['prefix' => '', 'verb' => '', 'params' => []];
+    $command = ['prefix' => '', 'verb' => null, 'params' => []];
     $msg = trim($msg);
     if ($msg && strlen($msg) >= 2 && strpos($prefixes, $msg[0]) !== false) {
-        $verb = strtolower(substr(rtrim($msg), 1, strpos($msg . ' ', ' ') - 1));
+        $verb = strtolower(substr($msg, 1, strpos($msg . ' ', ' ') - 1));
         if (ctype_alnum($verb)) {
             $command['prefix'] = $msg[0];
             $command['verb']   = $verb;
@@ -167,7 +168,7 @@ function sendAndDelete(EventHandler $mp, int $dest, string $text, int $delaysecs
                     'revoke' => true,
                     'id'     => [$msgid]
                 ]);
-                yield $mp->logger('Robot\'s startup message is deleted.', Logger::ERROR);
+                yield $mp->logger('Robot\'s startup message is deleted at ' . time() . '!', Logger::ERROR);
             } catch (\Exception $e) {
                 yield $mp->logger($e, Logger::ERROR);
             }
@@ -175,14 +176,17 @@ function sendAndDelete(EventHandler $mp, int $dest, string $text, int $delaysecs
     }
 }
 
-function getExecutionMethod(): string
+function getLastLaunch(EventHandler $eh): Generator
 {
-    if (PHP_OS_FAMILY === "Windows") {
-        return PHP_SAPI === 'cli' ? (isset($_SERVER['TERM']) ? 'Shell' : 'CMD') : 'Web';
-    } elseif (PHP_OS_FAMILY === "Linux") {
-        return PHP_SAPI === 'cli' ? (isset($_SERVER['TERM']) ? 'Shell' : 'Cron') : 'Web';
+    $launchesText = yield get('data/launches.txt');
+    $launches = explode("\n", trim($launchesText));
+    yield $eh->logger("Launches Count: " .  count($launches));
+    if (count($launches) === 0) {
+        return null;
     }
+    return end($launches);
 }
+
 function getWebServerName(): ?string
 {
     return $_SERVER['SERVER_NAME'] ?? null;
@@ -190,6 +194,66 @@ function getWebServerName(): ?string
 function setWebServerName(string $serverName): void
 {
     $_SERVER['SERVER_NAME'] = $serverName;
+}
+
+function getLaunchMethod2(): string
+{
+    if (PHP_OS_FAMILY === "Windows") {
+        return PHP_SAPI === 'cli' ? (isset($_SERVER['TERM']) ? 'manual' : 'cron') : 'web';
+    } elseif (PHP_OS_FAMILY === "Linux") {
+        return PHP_SAPI === 'cli' ? (isset($_SERVER['TERM']) ? 'manual' : 'cron') : 'web';
+    }
+}
+/*
+  Interface, LaunchMethod
+1) Web, Manual
+2) Web, Cron
+3) Web, Restart
+4) CLI, Manual
+5) CLI, Cron
+*/
+function getLaunchMethod(): string
+{
+    if (PHP_SAPI === 'cli') {
+        $interface = 'cli';
+        if ($_SERVER['TERM']) {
+            $launchMethod = 'manual';
+        } else {
+            $launchMethod = 'cron';
+        }
+    } else {
+        $interface  = 'web';
+        $requestUri = htmlspecialchars($_SERVER['REQUEST_URI'], ENT_QUOTES, 'UTF-8');
+        if (stripos($requestUri, '?MadelineSelfRestart=') !== false) {
+            $launchMethod = 'restart';
+        } else if (stripos($requestUri, 'cron') !== false) {
+            $launchMethod = 'cron';
+        } else {
+            $launchMethod = 'manual';
+        }
+    }
+    return $launchMethod;
+}
+
+function getHostTimeout($mp): int
+{
+    $duration = $mp->__get('duration');
+    $reason   = $mp->__get('shutdow_reason');
+    if ($duration /*&& $reason && $reason !== 'stop' && $reason !== 'restart'*/) {
+        return $duration;
+    }
+    return -1;
+}
+
+function getURL(): string
+{
+    //$_SERVER['REQUEST_URI'] => '/base/?MadelineSelfRestart=1755455420394943907'
+    $uri = null;
+    if (PHP_SAPI === 'cli') {
+        $url = (isset($_SERVER['HTTPS']) ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[REQUEST_URI]";
+        $url = htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
+    }
+    return $url;
 }
 
 function safeStartAndLoop(API $MadelineProto, GenericLoop $genLoop = null, int $maxRecycles = 10): void
@@ -239,7 +303,7 @@ function checkTooManyRestarts(EventHandler $eh): Generator
 {
     $startups = [];
     if (yield exists('data/startups.txt')) {
-        $startupsText = get('data/startups.txt');
+        $startupsText = yield get('data/startups.txt');
         $startups = explode('\n', $startupsText);
     } else {
         // Create the file
@@ -276,7 +340,7 @@ class EventHandler extends MadelineEventHandler
     private $notifState = true; // true: Notify; false: Never notify.
     private $notifAge   = 30;   // 30 => Delete the notifications after 30 seconds;  0 => Never Delete.
 
-    private $oldAge   = 2;
+    private $oldAge = 2;
 
     public function __construct(?APIWrapper $API)
     {
@@ -308,6 +372,7 @@ class EventHandler extends MadelineEventHandler
         } else {
             $this->account = strval($robot['id']);
         }
+        //yield $this->logger(toJSON($robot, false), Logger::ERROR);
 
         $this->ownerID     = $this->robotID;
         $this->admins      = [$this->robotID];
@@ -321,7 +386,7 @@ class EventHandler extends MadelineEventHandler
         $maxRestart = 5;
         $eh = $this;
         $restartsCount = yield checkTooManyRestarts($eh);
-        $nowstr   = date('d H:i:s', $this->startTime);
+        $nowstr = date('d H:i:s', $this->startTime);
         if ($restartsCount > $maxRestart) {
             $text = 'More than ' . $maxRestart . ' times restarted within a minute. Permanently shutting down ....';
             yield $this->logger($text, Logger::ERROR);
@@ -332,11 +397,11 @@ class EventHandler extends MadelineEventHandler
             if (Shutdown::removeCallback('restarter')) {
                 yield $this->logger('Self-Restarter disabled.', Logger::ERROR);
             }
-            yield $this->logger(ROBOT_NAME . ' on ' . hostname() . ' is stopping at ' . $nowstr, Logger::ERROR);
+            yield $this->logger(ROBOT_NAME . ' ' . ROBOT_VERSION . ' on ' . hostname() . ' is stopping at ' . $nowstr, Logger::ERROR);
             yield $this->stop();
             return;
         }
-        $text = ROBOT_NAME . ' started at ' . $nowstr . ' on ' . hostName() . ' using ' . $this->account . ' account.';
+        $text = ROBOT_NAME . ' ' . ROBOT_VERSION . ' started at ' . $nowstr . ' on ' . hostName() . ' using ' . $this->account . ' account.';
         $notifState = $this->notifState();
         $notifAge   = $this->notifAge();
         $dest       = $this->robotID;
@@ -400,7 +465,6 @@ class EventHandler extends MadelineEventHandler
     }
     public function onUpdateNewMessage($update)
     {
-        $moment = time();
         if (
             $update['message']['_'] === 'messageService' ||
             $update['message']['_'] === 'messageEmpty'
@@ -428,50 +492,46 @@ class EventHandler extends MadelineEventHandler
         $fromOffice   = null;
         $toOffice     = null;
         $this->updatesProcessed += 1;
+        $moment = time();
+        $msgAge = $moment - $msgDate;
 
         $command = parseCommand($msgOrig);
-        $verb    = $command['verb'] ?? null;
+        $verb    = $command['verb'];
         $params  = $command['params'];
 
         // Recognize and log old or new commands and reactions.
         if ($byRobot && $toRobot && $msgType === 'updateNewMessage') {
-            $diff    = $moment - $msgDate;
-            $new     = $diff <= $this->oldAge;
-            if ($verb && $verb !== '') {
+            $new = $msgAge <= $this->oldAge;
+            if ($verb) {
                 $age = $new ? 'New' : 'Old';
                 yield $this->logger(
                     "$age Command:{verb:'$verb', time:" . date('H:i:s', $msgDate) .
-                        ", now:" . date('H:i:s', $moment) . ", age:$diff}",
+                        ", now:" . date('H:i:s', $moment) . ", age:$msgAge}",
                     Logger::ERROR
                 );
             }
         }
 
-        // Log some information for debugging
-        if ($byRobot || $toRobot) {
-            $criteria = ['by_robot' => $byRobot, 'to_robot' => $toRobot, 'process' => $this->processCommands];
-            if ($verb && $verb !== '') {
-                $criteria['action'] = $msgOrig;
-            } else {
-                $criteria['reaction'] = mb_substr($msgOrig, 0, 60);
-            }
-            $this->logger(toJSON($criteria, false), Logger::ERROR);
-        }
-
         // Start the Command Processing Engine
         if (
             !$this->processCommands &&
-            $byRobot && $toRobot && $msgType === 'updateNewMessage' &&
-            strStartsWith($msgOrig, ROBOT_NAME . ' started at ')
+            $byRobot && $toRobot &&
+            $msgType === 'updateNewMessage' &&
+            //strStartsWith($msgOrig, ROBOT_NAME . ' started at ') &&
+            $msgAge <= $this->oldAge
         ) {
-            $diff = $moment - $msgDate;
-            if ($diff <= $this->oldAge) {
-                $this->processCommands = true;
-                yield $this->logger('Command-Processing engine started at ' . date('H:i:s', $moment), Logger::ERROR);
-            }
+            $this->processCommands = true;
+            yield $this->logger('Command-Processing engine started at ' . date('H:i:s', $moment), Logger::ERROR);
         }
 
-        if ($byRobot && $toRobot && $verb !== '' && $this->processCommands && $msgType === 'updateNewMessage') {
+        // Log some information for debugging
+        if ($byRobot || $toRobot) {
+            $criteria = ['by_robot' => $byRobot, 'to_robot' => $toRobot, 'process' => $this->processCommands];
+            $criteria[$verb ? 'action' : 'reaction'] = mb_substr($msgOrig, 0, 40);
+            $this->logger(toJSON($criteria, false), Logger::ERROR);
+        }
+
+        if ($byRobot && $toRobot && $verb && $this->processCommands && $msgType === 'updateNewMessage') {
             switch ($verb) {
                 case 'help':
                     yield $this->messages->editMessage([
@@ -500,29 +560,35 @@ class EventHandler extends MadelineEventHandler
                             '<br>' .
                             '<b>**Valid prefixes are / and !</b><br>',
                     ]);
+                    yield $this->logger("Command '/help' successfuly executed at " . date('d H:i:s!'), Logger::ERROR);
                     break;
                 case 'status':
+                    $launch = yield getLastLaunch($this);
                     $notif = 'OFF';
                     if ($this->notifState()) {
                         $notif = $this->notifAge() === 0 ? 'ON / Never wipe' : 'ON / Wipe in ' . $this->notifAge() . ' seconds';
                     }
                     $stats  = ROBOT_NAME . ' STATUS on ' . hostname() . ':' . PHP_EOL;
+                    $stats .= 'Script: '  . ROBOT_NAME . ' ' . ROBOT_VERSION . PHP_EOL;
                     $stats .= 'Account: '  . $this->account              . PHP_EOL;
                     $stats .= 'Uptime: '   . getUptime($this->startTime) . PHP_EOL;
                     $stats .= 'Peak Memory: ' . getMemUsage(true)        . PHP_EOL;
+                    $stats .= 'Allowed Memory: ' . ini_get('memory_limit') . PHP_EOL;
                     $stats .= 'CPU: '         . getCpuUsage()            . PHP_EOL;
-                    $stats .= 'Session size: ' . getSessionSize(SESSION_FILE) . PHP_EOL;
-                    $stats .= 'Time: ' . date_default_timezone_get() . ' ' . date("h:i:sa") . PHP_EOL;
+                    $stats .= 'Session Size: ' . getSessionSize(SESSION_FILE) . PHP_EOL;
+                    $stats .= 'Time: ' . date_default_timezone_get() . ' ' . date("d H:i:s") . PHP_EOL;
                     $stats .= 'Updates: '  . $this->updatesProcessed . PHP_EOL;
                     $stats .= 'Loop State: ' . ($this->getLoopState() ? 'ON' : 'OFF') . PHP_EOL;
                     $stats .= 'Notification: ' . $notif . PHP_EOL;
-                    $stats .= 'Execution Method: ' . getExecutionMethod() . PHP_EOL;
+                    $stats .= 'Launch Method: ' . getLaunchMethod() . PHP_EOL;
+                    $stats .= 'Last Launch: ' . ($launch ?? 'NOT APPLICABLE') . PHP_EOL;
                     //$this->echo(toJSON($peer, false));
                     yield $this->messages->editMessage([
                         'peer'    => $peer,
                         'id'      => $messageId,
                         'message' => $stats,
                     ]);
+                    yield $this->logger("Command '/status' successfuly executed at " . date('d H:i:s!'), Logger::ERROR);
                     break;
                 case 'stats':
                     if (false) {
@@ -537,7 +603,7 @@ class EventHandler extends MadelineEventHandler
                         yield enumeratePeers($params, function (array $base, array $extension) use (&$peerCounts) {
                             $peerCounts[$base['subtype']] += 1;
                         });
-                        $stats  = 'STATISTICS'                     . PHP_EOL;
+                        $stats  = 'STATISTICS' . PHP_EOL;
                         $stats  = ROBOT_NAME . ' STATISTICS on ' . hostname() . ':' . PHP_EOL;
                         $stats .= 'Users: '       . $peerCounts['user']         . PHP_EOL;
                         $stats .= 'Bots: '        . $peerCounts['bot']          . PHP_EOL;
@@ -577,7 +643,28 @@ class EventHandler extends MadelineEventHandler
                 case 'crash':
                     yield $this->logger("Purposefully crashing the script....", Logger::ERROR);
                     throw new \Exception('Artificial exception generated for testing the robot.');
+                case 'maxmem':
+                    $arr = array();
+                    try {
+                        for ($i = 1;; $i++) {
+                            $arr[] = md5(strvAL($i));
+                        }
+                    } catch (Exception $e) {
+                        unset($arr);
+                        $msg = $e->getMessage();
+                        yield $this->logger($msg, Logger::ERROR);
+                    }
+                    break;
                 case 'restart':
+                    if (PHP_SAPI === 'cli') {
+                        $result = yield $this->messages->editMessage([
+                            'peer'    => $peer,
+                            'id'      => $messageId,
+                            'message' => "Command '/restart' is only avaiable under webservers. Ignored!",
+                        ]);
+                        yield $this->logger("Command '/restart' is only avaiable under webservers. Ignored!  " . date('d H:i:s!'), Logger::ERROR);
+                        break;
+                    }
                     yield $this->logger('The robot re-started by the owner.', Logger::ERROR);
                     $result = yield $this->messages->editMessage([
                         'peer'    => $peer,
@@ -603,11 +690,24 @@ class EventHandler extends MadelineEventHandler
                         'message' => 'Robot is stopping ...',
                     ]);
                     break;
+
+                    // Place your code below: =========================================
+
+                    //case 'dasoor1':
+                    // your code
+                    // break;
+
+                    // case 'dasoor2':
+                    // your code
+                    // break;
+
+                    // ==================================================================
+
                 default:
                     $this->messages->editMessage([
                         'peer'    => $peer,
                         'id'      => $messageId,
-                        'message' => 'Invalid command: ' . "'" . $verb . "'",
+                        'message' => 'Invalid command: ' . "'" . $msgOrig . "'  received at " . date('d H:i:s', $moment)
                     ]);
                     break;
             } // enf of the command switch
@@ -623,24 +723,24 @@ class EventHandler extends MadelineEventHandler
     } // end of function
 } // end of the class
 
-$msg = "Trying to execute the script using " . getExecutionMethod() . " / '" . getWebServerName() . "' at " . date('d H:i:s') . "!";
-error_log($msg);
-
+if (PHP_SAPI !== 'cli') {
+    error_log("Robot's URL: '" . getURL() . "' SERVER_NAME: '" . getWebServerName() . "'");
+}
+error_log("Server's Memory Limit: " . ini_get('memory_limit'));
 if (PHP_SAPI !== 'cli' && !getWebServerName()) {
     if (SERVER_NAME === '') {
-        throw new Exception('To enable the restart, the webserver\'s SERVER_NAME must be defined!');
+        throw new Exception("To enable the restart, the constant SERVER_NAME must be defined as $httpHost!");
     }
     setWebServerName(SERVER_NAME);
 }
 
-$settings['logger']['logger_level'] = Logger::ERROR;
-$settings['logger']['logger']       = Logger::FILE_LOGGER;
-//$settings['logger']['logger_param'] = 'MadelineProto.log';
+//$settings['logger']['logger_level'] = Logger::ERROR;
+$settings['logger']['logger'] = Logger::FILE_LOGGER;
 $settings['peer']['full_info_cache_time'] = 60;
 $settings['serialization']['cleanup_before_serialization'] = true;
 $settings['serialization']['serialization_interval'] = 60;
-$settings['app_info']['app_version']    = ROBOT_NAME;
-$settings['app_info']['system_version'] =  hostname() . getExecutionMethod();
+$settings['app_info']['app_version']    = ROBOT_NAME . ' ' . ROBOT_VERSION;
+$settings['app_info']['system_version'] =  hostname() . ' ' . getLaunchMethod();
 $madelineProto = new API(SESSION_FILE, $settings);
 $madelineProto->async(true);
 
@@ -648,12 +748,13 @@ $genLoop = new GenericLoop(
     $madelineProto,
     function () use ($madelineProto) {
         $eventHandler = $madelineProto->getEventHandler();
-        if ($eventHandler->getLoopState()) {
-            $msg = 'Time is ' . date('H:i:s') . '!';
+        $now = time();
+        if ($eventHandler->getLoopState() && $now % 60 === 0) {
+            $msg = 'Time is ' . date('H:i:s', $now) . '!';
             yield $madelineProto->logger($msg, Logger::ERROR);
             if (false) {
                 yield $madelineProto->account->updateProfile([
-                    'about' => date('H:i:s')
+                    'about' => date('H:i:s', $now)
                 ]);
             }
             if (false) {
@@ -664,23 +765,43 @@ $genLoop = new GenericLoop(
                 ]);
             }
         }
-        $delay = yield secondsToNexMinute();
-        return $delay; // Repeat exactly at the begining of the next minute.
+        yield $this->sleep(1);
+        $delay = secondsToNexMinute();
+        return $delay; // Repeat at the begining of the next minute, sharp.
     },
     'Repeating Loop'
 );
 
+if (!$madelineProto) {
+    Logger::log("Unsuccessful Login, exiting ....", Logger::ERROR);
+    exit("Unsuccessful Login");
+}
 $robotName = ROBOT_NAME;
 $startTime = time();
-$tempId    = Shutdown::addCallback(
-    static function () use ($madelineProto, $robotName, $startTime) {
+$launchesFile = realpath('data/launches.txt');
+$tempId = Shutdown::addCallback(
+    static function () use ($madelineProto, $robotName, $startTime, $launchesFile) {
         $now      = time();
         $duration = $now - $startTime;
+        $launchMethod = getLaunchMethod();
         $msg = $robotName . " stopped at " . date("d H:i:s", $now) . "!  Execution duration:" . gmdate('H:i:s', $duration);
         if ($madelineProto) {
-            $madelineProto->logger($msg, Logger::ERROR);
+            try {
+                $madelineProto->logger($msg, Logger::ERROR);
+                $madelineProto->logger("Launch Method:'$launchMethod'  Duration: $duration", Logger::ERROR);
+                $launchesHandle = fopen($launchesFile, 'a');
+                fwrite($launchesHandle, "$launchMethod $duration\n");
+            } catch (\Exception $e) {
+                Logger::log($msg, Logger::ERROR);
+                Logger::log($e, Logger::ERROR);
+            }
         } else {
-            Logger::log($msg, Logger::ERROR);
+            try {
+                Logger::log($msg, Logger::ERROR);
+            } catch (\Exception $e) {
+                echo ('Oh, no!' . PHP_EOL);
+                var_dump($e);
+            }
         }
     },
     'duration'
