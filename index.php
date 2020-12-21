@@ -184,7 +184,8 @@ function getLastLaunch(EventHandler $eh): Generator
     if (count($launches) === 0) {
         return null;
     }
-    return end($launches);
+    $launch = trim(end($launches));
+    return $launch !== '' && $launch !== ' ' ? $launch : null;
 }
 
 function getWebServerName(): ?string
@@ -216,10 +217,16 @@ function getLaunchMethod(): string
 {
     if (PHP_SAPI === 'cli') {
         $interface = 'cli';
-        if ($_SERVER['TERM']) {
+        if (PHP_OS_FAMILY === "Linux") {
+            if ($_SERVER['TERM']) {
+                $launchMethod = 'manual';
+            } else {
+                $launchMethod = 'cron';
+            }
+        } elseif (PHP_OS_FAMILY === "Windows") {
             $launchMethod = 'manual';
         } else {
-            $launchMethod = 'cron';
+            throw new Exception('Unknown OS!');
         }
     } else {
         $interface  = 'web';
@@ -267,6 +274,7 @@ function safeStartAndLoop(API $MadelineProto, GenericLoop $genLoop = null, int $
                 if ($genLoop !== null) {
                     $genLoop->start(); // Do NOT use yield.
                 }
+
                 // Synchronously wait for the update loop to exit normally.
                 // The update loop exits either on ->stop or ->restart (which also calls ->stop).
                 Tools::wait(yield from $MadelineProto->API->loop());
@@ -348,14 +356,6 @@ class EventHandler extends MadelineEventHandler
 
         $this->startTime = time();
         $this->stopTime  = 0;
-
-        if (file_exists('data')) {
-            if (!is_dir('data')) {
-                throw new Exception('data folder already exists as a file');
-            }
-        } else {
-            mkdir('data'/*, NEEDED_ACCESS_LEVEL*/);
-        }
     }
 
     public function onStart(): \Generator
@@ -732,6 +732,22 @@ if (PHP_SAPI !== 'cli' && !getWebServerName()) {
         throw new Exception("To enable the restart, the constant SERVER_NAME must be defined as $httpHost!");
     }
     setWebServerName(SERVER_NAME);
+}
+
+if (file_exists('data')) {
+    if (!is_dir('data')) {
+        throw new Exception('data folder already exists as a file');
+    }
+} else {
+    mkdir('data'/*, NEEDED_ACCESS_LEVEL*/);
+}
+if (!file_exists('data/launches.txt')) {
+    $handle = fopen("data/launches.txt", "w");
+    fclose($handle);
+}
+if (!file_exists('data/startups.txt')) {
+    $handle = fopen("data/startups.txt", "w");
+    fclose($handle);
 }
 
 //$settings['logger']['logger_level'] = Logger::ERROR;
