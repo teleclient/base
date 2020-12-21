@@ -245,10 +245,10 @@ function getHostTimeout($mp): int
     return -1;
 }
 
-function getURL(): string
+function getURL(): ?string
 {
     //$_SERVER['REQUEST_URI'] => '/base/?MadelineSelfRestart=1755455420394943907'
-    $uri = null;
+    $url = null;
     if (PHP_SAPI === 'cli') {
         $url = (isset($_SERVER['HTTPS']) ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[REQUEST_URI]";
         $url = htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
