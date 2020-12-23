@@ -361,6 +361,9 @@ class EventHandler extends MadelineEventHandler
 
         $this->startTime = time();
         $this->stopTime  = 0;
+        $this->officeId  = 1373853876;
+        $this->ownerId   =  157887279;
+        //$this->admins = [906097988, 157887279];
     }
 
     public function onStart(): \Generator
@@ -379,9 +382,9 @@ class EventHandler extends MadelineEventHandler
         }
         //yield $this->logger(toJSON($robot, false), Logger::ERROR);
 
-        $this->ownerID     = $this->robotID;
-        $this->admins      = [$this->robotID];
-        $this->reportPeers = [$this->robotID];
+        //$this->ownerId   = $this->robotId;
+        $this->admins      = [$this->robotId, $this->ownerId];
+        $this->reportPeers = [$this->robotId];
 
         $this->setReportPeers($this->reportPeers);
 
@@ -503,6 +506,34 @@ class EventHandler extends MadelineEventHandler
         $command = parseCommand($msgOrig);
         $verb    = $command['verb'];
         $params  = $command['params'];
+
+        $toOffice  = $peerType === 'peerChannel' && $peer['channel_id'] === $this->officeId && $msg;
+        $fromAdmin = $toOffice && in_array($fromId, $this->admins);
+        yield $this->logger($update, Logger::ERROR);
+        yield $this->logger($peer, Logger::ERROR);
+        yield $this->logger($this->admins, Logger::ERROR);
+        yield $this->logger("fromId: $fromId");
+
+        switch ($fromAdmin && $verb ? $verb : '') {
+            case 'ping':
+                yield $this->messages->sendMessage([
+                    'peer'            => $peer,
+                    'reply_to_msg_id' => $messageId,
+                    'message'         => 'Pong',
+                ]);
+                yield $this->logger("Command '/ping' successfuly executed at " . date('d H:i:s!'), Logger::ERROR);
+                break;
+            case '':
+                // Not a verb and/or not sent by an admin.
+                break;
+            default:
+                $this->messages->sendMessage([
+                    'peer' => $peer,
+                    'reply_to_msg_id' => $messageId,
+                    'message' => 'Invalid command: ' . "'" . $msgOrig . "'  received at " . date('d H:i:s', $moment)
+                ]);
+                break;
+        }
 
         // Recognize and log old or new commands and reactions.
         if ($byRobot && $toRobot && $msgType === 'updateNewMessage') {
@@ -755,7 +786,7 @@ if (!file_exists('data/startups.txt')) {
     fclose($handle);
 }
 
-$settings['logger']['logger_level'] = Logger::ERROR;
+//$settings['logger']['logger_level'] = Logger::ERROR;
 $settings['logger']['logger'] = Logger::FILE_LOGGER;
 $settings['peer']['full_info_cache_time'] = 60;
 $settings['serialization']['cleanup_before_serialization'] = true;
