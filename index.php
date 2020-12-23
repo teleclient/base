@@ -361,7 +361,9 @@ class EventHandler extends MadelineEventHandler
 
         $this->startTime = time();
         $this->stopTime  = 0;
-        $this->officeId  = 0;
+        $this->officeId  = 1373853876;
+        $this->ownerId   =  157887279;
+        //$this->admins = [906097988, 157887279];
     }
 
     public function onStart(): \Generator
@@ -380,8 +382,8 @@ class EventHandler extends MadelineEventHandler
         }
         //yield $this->logger(toJSON($robot, false), Logger::ERROR);
 
-        $this->ownerID     = $this->robotId;
-        $this->admins      = [$this->robotId];
+        //$this->ownerId   = $this->robotId;
+        $this->admins      = [$this->robotId, $this->ownerId];
         $this->reportPeers = [$this->robotId];
 
         $this->setReportPeers($this->reportPeers);
@@ -505,6 +507,10 @@ class EventHandler extends MadelineEventHandler
 
         $toOffice  = $peerType === 'peerChannel' && $peer['channel_id'] === $this->officeId && $msg;
         $fromAdmin = $toOffice && in_array($fromId, $this->admins);
+        yield $this->logger($update, Logger::ERROR);
+        yield $this->logger($peer, Logger::ERROR);
+        yield $this->logger($this->admins, Logger::ERROR);
+        yield $this->logger("fromId: $fromId");
 
         switch ($fromAdmin && $verb ? $verb : '') {
             case 'ping':
@@ -778,7 +784,7 @@ if (!file_exists('data/startups.txt')) {
     fclose($handle);
 }
 
-$settings['logger']['logger_level'] = Logger::ERROR;
+//$settings['logger']['logger_level'] = Logger::ERROR;
 $settings['logger']['logger'] = Logger::FILE_LOGGER;
 $settings['peer']['full_info_cache_time'] = 60;
 $settings['serialization']['cleanup_before_serialization'] = true;
