@@ -11,17 +11,17 @@ ini_set('ignore_repeated_errors', '1');               // always TRUE
 ini_set('display_startup_errors', '1');
 ini_set('display_errors',         '1');               // FALSE only in production or real server
 ini_set('log_errors',             '1');               // Error logging engine
-ini_set('error_log',              'MadelineProto.log');  // Logging file path
+ini_set('error_log',              'MadelineProto.log'); // Logging file path
 
 if (!\file_exists('madeline.php')) {
     \copy('https://phar.madelineproto.xyz/madeline.php', 'madeline.php');
 }
 require 'madeline.php';
 
-define("ROBOT_NAME",    'Base');
-define("ROBOT_VERSION", 'V1.1.1');
-define('SESSION_FILE', 'session.madeline');
-define('SERVER_NAME',  '');
+define("SCRIPT_NAME",    'Base');
+define("SCRIPT_VERSION", 'V1.1.0');
+define('SESSION_FILE',   'session.madeline');
+define('SERVER_NAME',    '');
 define('SAPI_NAME', (PHP_SAPI === 'cli') ? (isset($_SERVER['TERM']) ? 'Shell' : 'Cron') : 'Web');
 
 use \danog\MadelineProto\EventHandler as MadelineEventHandler;
@@ -344,9 +344,9 @@ class EventHandler extends MadelineEventHandler
     private $startTime;
     private $stopTime;
 
-    private $robotID;     // id of the account which registered this app.
+    private $robotId;     // id of the account which registered this app.
     private $owner;       // id or username of the owner of the robot.
-    private $officeID;    // id of the office channel;
+    private $officeId;    // id of the office channel;
     private $admins;      // ids of the accounts which heave admin rights.
     private $reportPeers; // ids of the support people who will receive the errors.
 
@@ -361,6 +361,7 @@ class EventHandler extends MadelineEventHandler
 
         $this->startTime = time();
         $this->stopTime  = 0;
+        $this->officeId  = 0;
     }
 
     public function onStart(): \Generator
@@ -369,7 +370,7 @@ class EventHandler extends MadelineEventHandler
         yield $this->logger("Event Handler started at " . date('d H:i:s') . "!", Logger::ERROR);
 
         $robot = yield $this->getSelf();
-        $this->robotID = $robot['id'];
+        $this->robotId = $robot['id'];
         if (isset($robot['username'])) {
             $this->account = $robot['username'];
         } elseif (isset($robot['first_name'])) {
@@ -379,9 +380,9 @@ class EventHandler extends MadelineEventHandler
         }
         //yield $this->logger(toJSON($robot, false), Logger::ERROR);
 
-        $this->ownerID     = $this->robotID;
-        $this->admins      = [$this->robotID];
-        $this->reportPeers = [$this->robotID];
+        $this->ownerID     = $this->robotId;
+        $this->admins      = [$this->robotId];
+        $this->reportPeers = [$this->robotId];
 
         $this->setReportPeers($this->reportPeers);
 
@@ -396,20 +397,20 @@ class EventHandler extends MadelineEventHandler
             $text = 'More than ' . $maxRestart . ' times restarted within a minute. Permanently shutting down ....';
             yield $this->logger($text, Logger::ERROR);
             yield $this->messages->sendMessage([
-                'peer'    => $this->robotID,
+                'peer'    => $this->robotId,
                 'message' => $text
             ]);
             if (Shutdown::removeCallback('restarter')) {
                 yield $this->logger('Self-Restarter disabled.', Logger::ERROR);
             }
-            yield $this->logger(ROBOT_NAME . ' ' . ROBOT_VERSION . ' on ' . hostname() . ' is stopping at ' . $nowstr, Logger::ERROR);
+            yield $this->logger(SCRIPT_NAME . ' ' . SCRIPT_VERSION . ' on ' . hostname() . ' is stopping at ' . $nowstr, Logger::ERROR);
             yield $this->stop();
             return;
         }
-        $text = ROBOT_NAME . ' ' . ROBOT_VERSION . ' started at ' . $nowstr . ' on ' . hostName() . ' using ' . $this->account . ' account.';
+        $text = SCRIPT_NAME . ' ' . SCRIPT_VERSION . ' started at ' . $nowstr . ' on ' . hostName() . ' using ' . $this->account . ' account.';
         $notifState = $this->notifState();
         $notifAge   = $this->notifAge();
-        $dest       = $this->robotID;
+        $dest       = $this->robotId;
         //yield sendAndDelete($eh, $dest, $text, $notifState, $notifAge);
         if ($notifState) {
             $result = yield $eh->messages->sendMessage([
@@ -437,7 +438,7 @@ class EventHandler extends MadelineEventHandler
 
     public function getRobotID(): int
     {
-        return $this->robotID;
+        return $this->robotId;
     }
 
     public function getLoopState(): bool
@@ -491,11 +492,9 @@ class EventHandler extends MadelineEventHandler
         $isOutward    = $update['message']['out'] ?? false;
         $peerType     = $update['message']['to_id']['_'] ?? '';
         $peer         = $update['message']['to_id'] ?? null;
-        $byRobot      = $fromId    === $this->robotID && $msg;
-        $toRobot      = $peerType  === 'peerUser' && $peer['user_id'] === $this->robotID && $msg;
-        $replyToRobot = $replyToId === $this->robotID && $msg;
-        $fromOffice   = null;
-        $toOffice     = null;
+        $byRobot      = $fromId    === $this->robotId && $msg;
+        $toRobot      = $peerType  === 'peerUser' && $peer['user_id'] === $this->robotId && $msg;
+        $replyToRobot = $replyToId === $this->robotId && $msg;
         $this->updatesProcessed += 1;
         $moment = time();
         $msgAge = $moment - $msgDate;
@@ -503,6 +502,30 @@ class EventHandler extends MadelineEventHandler
         $command = parseCommand($msgOrig);
         $verb    = $command['verb'];
         $params  = $command['params'];
+
+        $toOffice  = $peerType === 'peerChannel' && $peer['channel_id'] === $this->officeId && $msg;
+        $fromAdmin = $toOffice && in_array($fromId, $this->admins);
+
+        switch ($fromAdmin && $verb ? $verb : '') {
+            case 'ping':
+                yield $this->messages->sendMessage([
+                    'peer'            => $peer,
+                    'reply_to_msg_id' => $messageId,
+                    'message'         => 'Pong'
+                ]);
+                yield $this->logger("Command '/ping' successfuly executed at " . date('d H:i:s!'), Logger::ERROR);
+                break;
+            case '':
+                // Not a verb and/or not sent by an admin.
+                break;
+            default:
+                $this->messages->sendMessage([
+                    'peer'            => $peer,
+                    'reply_to_msg_id' => $messageId,
+                    'message'         => "Invalid command: '$msgOrig'"
+                ]);
+                break;
+        }
 
         // Recognize and log old or new commands and reactions.
         if ($byRobot && $toRobot && $msgType === 'updateNewMessage') {
@@ -522,7 +545,7 @@ class EventHandler extends MadelineEventHandler
             !$this->processCommands &&
             $byRobot && $toRobot &&
             $msgType === 'updateNewMessage' &&
-            //strStartsWith($msgOrig, ROBOT_NAME . ' started at ') &&
+            //strStartsWith($msgOrig, SCRIPT_NAME . ' started at ') &&
             $msgAge <= $this->oldAge
         ) {
             $this->processCommands = true;
@@ -573,8 +596,8 @@ class EventHandler extends MadelineEventHandler
                     if ($this->notifState()) {
                         $notif = $this->notifAge() === 0 ? 'ON / Never wipe' : 'ON / Wipe in ' . $this->notifAge() . ' seconds';
                     }
-                    $stats  = ROBOT_NAME . ' STATUS on ' . hostname() . ':' . PHP_EOL;
-                    $stats .= 'Script: '  . ROBOT_NAME . ' ' . ROBOT_VERSION . PHP_EOL;
+                    $stats  = SCRIPT_NAME . ' STATUS on ' . hostname() . ':' . PHP_EOL;
+                    $stats .= 'Script: '  . SCRIPT_NAME . ' ' . SCRIPT_VERSION . PHP_EOL;
                     $stats .= 'Account: '  . $this->account              . PHP_EOL;
                     $stats .= 'Uptime: '   . getUptime($this->startTime) . PHP_EOL;
                     $stats .= 'Peak Memory: ' . getMemUsage(true)        . PHP_EOL;
@@ -609,7 +632,7 @@ class EventHandler extends MadelineEventHandler
                             $peerCounts[$base['subtype']] += 1;
                         });
                         $stats  = 'STATISTICS' . PHP_EOL;
-                        $stats  = ROBOT_NAME . ' STATISTICS on ' . hostname() . ':' . PHP_EOL;
+                        $stats  = SCRIPT_NAME . ' STATISTICS on ' . hostname() . ':' . PHP_EOL;
                         $stats .= 'Users: '       . $peerCounts['user']         . PHP_EOL;
                         $stats .= 'Bots: '        . $peerCounts['bot']          . PHP_EOL;
                         $stats .= 'Chats: '       . $peerCounts['chat']         . PHP_EOL;
@@ -760,7 +783,7 @@ $settings['logger']['logger'] = Logger::FILE_LOGGER;
 $settings['peer']['full_info_cache_time'] = 60;
 $settings['serialization']['cleanup_before_serialization'] = true;
 $settings['serialization']['serialization_interval'] = 60;
-$settings['app_info']['app_version']    = ROBOT_NAME . ' ' . ROBOT_VERSION;
+$settings['app_info']['app_version']    = SCRIPT_NAME . ' ' . SCRIPT_VERSION;
 $settings['app_info']['system_version'] =  hostname() . ' ' . getLaunchMethod();
 $madelineProto = new API(SESSION_FILE, $settings);
 $madelineProto->async(true);
@@ -779,9 +802,9 @@ $genLoop = new GenericLoop(
                 ]);
             }
             if (false) {
-                $robotID = $eventHandler->getRobotID();
+                $robotId = $eventHandler->getRobotID();
                 yield $madelineProto->messages->sendMessage([
-                    'peer'    => $robotID,
+                    'peer'    => $robotId,
                     'message' => $msg
                 ]);
             }
@@ -797,9 +820,9 @@ if (!$madelineProto) {
     Logger::log("Unsuccessful Login, exiting ....", Logger::ERROR);
     exit("Unsuccessful Login");
 }
-$robotName = ROBOT_NAME;
-$startTime = time();
-$launchesFile = realpath('data/launches.txt');
+$robotName = SCRIPT_NAME;
+$startTime = \time();
+$launchesFile = \realpath('data/launches.txt');
 $tempId = Shutdown::addCallback(
     static function () use ($madelineProto, $robotName, $startTime, $launchesFile) {
         $now      = time();
