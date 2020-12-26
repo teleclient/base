@@ -13,14 +13,17 @@ ini_set('display_errors',         '1');               // FALSE only in productio
 ini_set('log_errors',             '1');               // Error logging engine
 ini_set('error_log',              'MadelineProto.log'); // Logging file path
 
-if (!\file_exists('madeline.php')) {
-    \copy('https://phar.madelineproto.xyz/madeline.php', 'madeline.php');
+if (\file_exists('vendor/autoload.php')) {
+    include 'vendor/autoload.php';
+} else {
+    if (!\file_exists('madeline.php')) {
+        \copy('https://phar.madelineproto.xyz/madeline.php', 'madeline.php');
+    }
+    include 'madeline.php';
 }
-require 'madeline.php';
-//require 'functions.php';
 
 define("SCRIPT_NAME",    'Base');
-define("SCRIPT_VERSION", 'V1.2.0');
+define("SCRIPT_VERSION", 'V1.2.1');
 define('SESSION_FILE',   'session.madeline');
 define('SERVER_NAME',    '');
 define('SAPI_NAME', (PHP_SAPI === 'cli') ? (isset($_SERVER['TERM']) ? 'Shell' : 'Cron') : 'Web');
@@ -192,12 +195,13 @@ function sendAndDelete(EventHandler $mp, int $dest, string $text, int $delaysecs
 
 function getLastLaunch(EventHandler $eh): Generator
 {
-    $launchesText = yield get('data/launches.txt');
-    $launches = explode("\n", trim($launchesText));
-    yield $eh->logger("Launches Count: " .  count($launches));
-    if (count($launches) === 0) {
+    $content = yield get('data/launches.txt');
+    if ($content === '') {
         return null;
     }
+    $content  = substr($content, 1);
+    $launches = explode("\n", $content);
+    yield $eh->logger("Launches Count:" . count($launches), Logger::ERROR);
     $launch = explode(' ', trim(end($launches)));
     if (count($launch) !== 2) {
         throw new Exception("Invalid launch information .");
@@ -350,7 +354,7 @@ function checkTooManyRestarts(EventHandler $eh): Generator
     $startupsText = implode('\n', $startups);
     yield put('data/startups.txt', $startupsText);
     $restartsCount = count($startups);
-    yield $eh->logger("startups: {now:$nowMilli, count0:$startupsCount0, count1:$restartsCount}");
+    yield $eh->logger("startups: {now:$nowMilli, count0:$startupsCount0, count1:$restartsCount}", Logger::ERROR);
     return $restartsCount;
 }
 
@@ -369,8 +373,8 @@ function telegram2dialogSlices($mp, ?array $params, Closure $sliceCallback = nul
     }
     $limit      = $params['limit']       ?? 100;
     $maxDialogs = $params['max_dialogs'] ?? 100000;
-    $pauseMin   = $params['pause_min']   ?? 3;
-    $pauseMax   = $params['pause_max']   ?? 10;
+    $pauseMin   = $params['pause_min']   ?? 0;
+    $pauseMax   = $params['pause_max']   ?? 0;
     $pauseMax   = $pauseMax < $pauseMin ? $pauseMin : $pauseMax;
     $json = toJSON([
         'limit'       => $limit,
@@ -557,8 +561,6 @@ function visitDialogs($mp, array $params, callable $callback): \Generator
         }
     );
 }
-
-
 
 class EventHandler extends MadelineEventHandler
 {
@@ -892,7 +894,7 @@ class EventHandler extends MadelineEventHandler
                     $stats .= "Forbidden Basic groups: {$peerCounts['chatForbidden']}<br>";
                     $stats .= "Supergroups: {$peerCounts['supergroup']}<br>";
                     $stats .= "channels: {$peerCounts['channel']}<br>";
-                    $stats .= "Forbidden Supergroups or channels: {$peerCounts['channelForbidden']}<br>";
+                    $stats .= "Forbidden Supergroups or Channels: {$peerCounts['channelForbidden']}<br>";
                     yield $this->messages->editMessage([
                         'peer'       => $peer,
                         'id'         => $messageId,
@@ -1033,13 +1035,13 @@ if (!file_exists('data/startups.txt')) {
     fclose($handle);
 }
 
-//$settings['logger']['logger_level'] = Logger::ERROR;
+$settings['logger']['logger_level'] = Logger::ERROR;
 $settings['logger']['logger'] = Logger::FILE_LOGGER;
 $settings['peer']['full_info_cache_time'] = 60;
 $settings['serialization']['cleanup_before_serialization'] = true;
 $settings['serialization']['serialization_interval'] = 60;
 $settings['app_info']['app_version']    = SCRIPT_NAME . ' ' . SCRIPT_VERSION;
-$settings['app_info']['system_version'] =  hostname() . ' ' . getLaunchMethod();
+$settings['app_info']['system_version'] =  hostname() . ' ' . PHP_SAPI === 'cli' ? 'CLI' : "WEB";
 $madelineProto = new API(SESSION_FILE, $settings);
 $madelineProto->async(true);
 
@@ -1090,7 +1092,7 @@ $tempId = Shutdown::addCallback(
                 $madelineProto->logger($msg, Logger::ERROR);
                 $madelineProto->logger("Launch Method:'$launchMethod'  Duration: $duration", Logger::ERROR);
                 $launchesHandle = fopen($launchesFile, 'a');
-                fwrite($launchesHandle, "$launchMethod $duration\n");
+                fwrite($launchesHandle, "\n$launchMethod $duration");
             } catch (\Exception $e) {
                 Logger::log($msg, Logger::ERROR);
                 Logger::log($e, Logger::ERROR);
