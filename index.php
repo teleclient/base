@@ -354,7 +354,6 @@ function checkTooManyRestarts(EventHandler $eh): Generator
     return $restartsCount;
 }
 
-
 function telegram2dialogSlices($mp, ?array $params, Closure $sliceCallback = null): \Generator
 {
     foreach ($params as $key => $param) {
@@ -370,8 +369,8 @@ function telegram2dialogSlices($mp, ?array $params, Closure $sliceCallback = nul
     }
     $limit      = $params['limit']       ?? 100;
     $maxDialogs = $params['max_dialogs'] ?? 100000;
-    $pauseMin   = $params['pause_min']   ?? 10;
-    $pauseMax   = $params['pause_max']   ?? 20;
+    $pauseMin   = $params['pause_min']   ?? 3;
+    $pauseMax   = $params['pause_max']   ?? 10;
     $pauseMax   = $pauseMax < $pauseMin ? $pauseMin : $pauseMax;
     $json = toJSON([
         'limit'       => $limit,
@@ -423,7 +422,6 @@ function telegram2dialogSlices($mp, ?array $params, Closure $sliceCallback = nul
             //===================================================================================================
             $sentDialogs += count($res['dialogs']);
             yield $mp->logger("Sent Dialogs:$sentDialogs,  Max Dialogs:$maxDialogs, Slice Size:$sliceSize", Logger::ERROR);
-            yield $mp->logger(' ', Logger::ERROR);
             if ($sentDialogs >= $maxDialogs) {
                 break;
             }
@@ -474,7 +472,10 @@ function telegram2dialogSlices($mp, ?array $params, Closure $sliceCallback = nul
             $pause = $pauseMax <= $pauseMin ? $pauseMin : rand($pauseMin, $pauseMax);
             //yield $mp->echo("Pausing for $pause seconds. ...".PHP_EOL);
             yield $mp->logger("Pausing for $pause seconds. ...", Logger::ERROR);
+            yield $mp->logger(" ", Logger::ERROR);
             yield $mp->sleep($pause);
+        } else {
+            yield $mp->logger(" ", Logger::ERROR);
         }
     } // end of while/for
     //echo('Exiting telegram2dialogSlices!'.PHP_EOL);
@@ -485,65 +486,76 @@ function telegram2dialogSlices($mp, ?array $params, Closure $sliceCallback = nul
 function visitDialogs($mp, array $params, callable $callback): \Generator
 {
     //yield $mp->logger("Entered VisitDialogs:" . toJSON($params, false), Logger::ERROR);
-    yield telegram2dialogSlices($mp, $params, function (int $totalDialogs, array $dialogs, array $messages, array $chats, array $users) use ($callback, $mp): Generator {
-        //yield $mp->logger("Entered telegram2dialogSlices.", Logger::ERROR);
-        //yield $mp->echo("Entered telegram2dialogSlices." . PHP_EOL);
-        $index = 0;
-        foreach ($dialogs as $dialog) {
-            $peer = $dialog['peer'];
-            switch ($peer['_']) {
-                case 'peerUser':
-                    $peerId = $peer['user_id'];
-                    foreach ($users as $user) {
-                        if ($peerId === $user['id']) {
-                            $subtype = ($user['bot'] ?? false) ? 'bot' : 'user';
-                            $title   = '';
-                            $peerval = $user;
-                            break 2;
-                        }
-                    }
-                    throw new Exception("Missing user: '$peerId'");
-                case 'peerChat':
-                case 'peerChannel':
-                    $peerId = $peer['_'] === 'peerChat' ? $peer['chat_id'] : $peer['channel_id'];
-                    foreach ($chats as $chat) {
-                        if ($chat['id'] === $peerId) {
-                            $peerval = $chat;
-                            switch ($chat['_']) {
-                                case 'chatEmpty':
-                                    $subtype = $chat['_'];
-                                    $title   = '';
-                                    break;
-                                case 'chat':
-                                    $subtype = 'basicgroup';
-                                    $title   = '';
-                                    break;
-                                case 'chatForbidden':
-                                    $subtype = $chat['_'];
-                                    $title   = '';
-                                    break;
-                                case 'channel':
-                                    $subtype = ($chat['megagroup'] ?? false) ? 'supergroup' : 'channel';
-                                    $title   = '';
-                                    break;
-                                case 'channelForbidden':
-                                    $subtype = $chat['_'];
-                                    $title   = '';
-                                    break;
-                                default:
-                                    throw new Exception("Unknown subtype: '$peerId'  '" . $chat['_'] . "'");
+    yield telegram2dialogSlices(
+        $mp,
+        $params,
+        function (
+            int $totalDialogs,
+            array $dialogs,
+            array $messages,
+            array $chats,
+            array $users
+        )
+        use ($callback, $mp): Generator {
+            //yield $mp->logger("Entered telegram2dialogSlices.", Logger::ERROR);
+            //yield $mp->echo("Entered telegram2dialogSlices." . PHP_EOL);
+            $index = 0;
+            foreach ($dialogs as $dialog) {
+                $peer = $dialog['peer'];
+                switch ($peer['_']) {
+                    case 'peerUser':
+                        $peerId = $peer['user_id'];
+                        foreach ($users as $user) {
+                            if ($peerId === $user['id']) {
+                                $subtype = ($user['bot'] ?? false) ? 'bot' : 'user';
+                                $title   = '';
+                                $peerval = $user;
+                                break 2;
                             }
-                            break 2;
                         }
-                    }
-                    throw new Exception("Missing chat: '$peerId'");
-                default:
-                    throw new Exception("Invalid peer type: '" . $peer['_'] . "'");
+                        throw new Exception("Missing user: '$peerId'");
+                    case 'peerChat':
+                    case 'peerChannel':
+                        $peerId = $peer['_'] === 'peerChat' ? $peer['chat_id'] : $peer['channel_id'];
+                        foreach ($chats as $chat) {
+                            if ($chat['id'] === $peerId) {
+                                $peerval = $chat;
+                                switch ($chat['_']) {
+                                    case 'chatEmpty':
+                                        $subtype = $chat['_'];
+                                        $title   = '';
+                                        break;
+                                    case 'chat':
+                                        $subtype = 'basicgroup';
+                                        $title   = '';
+                                        break;
+                                    case 'chatForbidden':
+                                        $subtype = $chat['_'];
+                                        $title   = '';
+                                        break;
+                                    case 'channel':
+                                        $subtype = ($chat['megagroup'] ?? false) ? 'supergroup' : 'channel';
+                                        $title   = '';
+                                        break;
+                                    case 'channelForbidden':
+                                        $subtype = $chat['_'];
+                                        $title   = '';
+                                        break;
+                                    default:
+                                        throw new Exception("Unknown subtype: '$peerId'  '" . $chat['_'] . "'");
+                                }
+                                break 2;
+                            }
+                        }
+                        throw new Exception("Missing chat: '$peerId'");
+                    default:
+                        throw new Exception("Invalid peer type: '" . $peer['_'] . "'");
+                }
+                yield $callback($totalDialogs, $index, $peerId, $subtype, $title, $peerval);
+                $index += 1;
             }
-            yield $callback($totalDialogs, $index, $peerId, $subtype, $title, $peerval);
-            $index += 1;
         }
-    });
+    );
 }
 
 
@@ -858,10 +870,10 @@ class EventHandler extends MadelineEventHandler
                         'chatForbidden' => 0, 'channelForbidden' => 0
                     ];
                     $params = [];
-                    //$params['limit']       = 100;
+                    //$params['limit']       =  50;
                     //$params['max_dialogs'] = 200;
-                    //$params['pause_min']   =   0;
-                    //$params['pause_max']   =   0;
+                    //$params['pause_min']   =   2;
+                    //$params['pause_max']   =   6;
                     yield visitDialogs(
                         $this,
                         $params,
@@ -1031,11 +1043,6 @@ $settings['app_info']['system_version'] =  hostname() . ' ' . getLaunchMethod();
 $madelineProto = new API(SESSION_FILE, $settings);
 $madelineProto->async(true);
 
-if ($madelineProto->authorized !== MTProto::LOGGED_IN) {
-    //echo ("Authorization:'$madelineProto->authorized'" . PHP_EOL);
-    //exit("App is not authorized.");
-}
-
 $genLoop = new GenericLoop(
     $madelineProto,
     function () use ($madelineProto) {
@@ -1068,8 +1075,9 @@ if (!$madelineProto) {
     Logger::log("Unsuccessful Login, exiting ....", Logger::ERROR);
     exit("Unsuccessful Login");
 }
-$robotName = SCRIPT_NAME;
-$startTime = \time();
+
+$robotName    = SCRIPT_NAME;
+$startTime    = \time();
 $launchesFile = \realpath('data/launches.txt');
 $tempId = Shutdown::addCallback(
     static function () use ($madelineProto, $robotName, $startTime, $launchesFile) {
