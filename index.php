@@ -17,9 +17,10 @@ if (!\file_exists('madeline.php')) {
     \copy('https://phar.madelineproto.xyz/madeline.php', 'madeline.php');
 }
 require 'madeline.php';
+//require 'functions.php';
 
 define("SCRIPT_NAME",    'Base');
-define("SCRIPT_VERSION", 'V1.1.0');
+define("SCRIPT_VERSION", 'V1.2.0');
 define('SESSION_FILE',   'session.madeline');
 define('SERVER_NAME',    '');
 define('SAPI_NAME', (PHP_SAPI === 'cli') ? (isset($_SERVER['TERM']) ? 'Shell' : 'Cron') : 'Web');
@@ -32,6 +33,7 @@ use \danog\MadelineProto\APIWrapper;
 use \danog\MadelineProto\Shutdown;
 use \danog\MadelineProto\Magic;
 use \danog\MadelineProto\Loop\Generic\GenericLoop;
+use \danog\MadelineProto\MTProto;
 use function\Amp\File\{get, put, exists};
 
 function toJSON($var, bool $pretty = true): string
@@ -43,6 +45,16 @@ function toJSON($var, bool $pretty = true): string
     $json = \json_encode($var, $opts | ($pretty ? JSON_PRETTY_PRINT : 0));
     $json = ($json !== '') ? $json : var_export($var, true);
     return $json;
+}
+
+function errHandle($errNo, $errStr, $errFile, $errLine)
+{
+    $msg = "$errStr in $errFile on line $errLine";
+    if ($errNo == E_NOTICE || $errNo == E_WARNING) {
+        throw new ErrorException($msg, $errNo);
+    } else {
+        echo $msg;
+    }
 }
 
 function nowMilli()
@@ -186,8 +198,11 @@ function getLastLaunch(EventHandler $eh): Generator
     if (count($launches) === 0) {
         return null;
     }
-    $launch = trim(end($launches));
-    return $launch !== '' && $launch !== ' ' ? $launch : null;
+    $launch = explode(' ', trim(end($launches)));
+    if (count($launch) !== 2) {
+        throw new Exception("Invalid launch information .");
+    }
+    return $launch;
 }
 
 function getWebServerName(): ?string
@@ -339,19 +354,215 @@ function checkTooManyRestarts(EventHandler $eh): Generator
     return $restartsCount;
 }
 
+
+function telegram2dialogSlices($mp, ?array $params, Closure $sliceCallback = null): \Generator
+{
+    foreach ($params as $key => $param) {
+        switch ($key) {
+            case 'limit':
+            case 'max_dialogs':
+            case 'pause_min':
+            case 'pause_max':
+                break;
+            default:
+                throw new Exception("Unknown Parameter: $key");
+        }
+    }
+    $limit      = $params['limit']       ?? 100;
+    $maxDialogs = $params['max_dialogs'] ?? 100000;
+    $pauseMin   = $params['pause_min']   ?? 10;
+    $pauseMax   = $params['pause_max']   ?? 20;
+    $pauseMax   = $pauseMax < $pauseMin ? $pauseMin : $pauseMax;
+    $json = toJSON([
+        'limit'       => $limit,
+        'max_dialogs' => $maxDialogs,
+        'pause_min'   => $pauseMin,
+        'pause_max'   => $pauseMax
+    ]);
+    yield $mp->logger($json, Logger::ERROR);
+
+    //yield $mp->echo('Entering telegram2dialogSlices!' . PHP_EOL);
+    //yield $mp->logger('Entering telegram2dialogSlices! ' . toJSON($params, false), Logger::ERROR);
+
+    $params = [
+        'offset_date' => 0,
+        'offset_id'   => 0,
+        'offset_peer' => ['_' => 'inputPeerEmpty'],
+        'limit'       => $limit,
+        'hash'        => 0,
+    ];
+    $res     = ['count' => 1];
+    $fetched = 0;
+    $sentDialogs  = 0;
+    while ($fetched < $res['count']) {
+        //yield $mp->echo(PHP_EOL . 'Request: ' . toJSON($params, false) . PHP_EOL);
+        yield $mp->logger('Request: ' . toJSON($params, false), Logger::ERROR);
+
+        //==============================================
+        $res = yield $mp->messages->getDialogs($params);
+        //==============================================
+
+        $sliceSize    = count($res['dialogs']);
+        $totalDialogs = isset($res['count']) ? $res['count'] : $sliceSize;
+
+        $messageCount = count($res['messages']);
+        $chatCount    = count($res['chats']);
+        $userCount    = count($res['users']);
+        $fetchedSofar = $fetched + $sliceSize;
+        $countMsg     = "Result: {dialogs:$sliceSize, messages:$messageCount, chats:$chatCount, users:$userCount " .
+            "total:$totalDialogs fetched:$fetchedSofar}";
+        //yield $mp->echo($countMsg. PHP_EOL . PHP_EOL);
+        yield $mp->logger($countMsg, Logger::ERROR);
+        if (count($res['messages']) !== $sliceSize) {
+            throw new Exception('Unequal slice size.');
+        }
+
+        if ($sliceCallback !== null) {
+            //===================================================================================================
+            yield $sliceCallback($totalDialogs, $res['dialogs'], $res['messages'], $res['chats'], $res['users']);
+            //===================================================================================================
+            $sentDialogs += count($res['dialogs']);
+            yield $mp->logger("Sent Dialogs:$sentDialogs,  Max Dialogs:$maxDialogs, Slice Size:$sliceSize", Logger::ERROR);
+            yield $mp->logger(' ', Logger::ERROR);
+            if ($sentDialogs >= $maxDialogs) {
+                break;
+            }
+        }
+
+        $lastPeer = 0;
+        $lastDate = 0;
+        $lastId   = 0;
+        $res['messages'] = \array_reverse($res['messages'] ?? []);
+        foreach (\array_reverse($res['dialogs'] ?? []) as $dialog) {
+            $fetched += 1;
+            $id = yield $mp->getId($dialog['peer']);
+            if (!$lastDate) {
+                if (!$lastPeer) {
+                    $lastPeer = $id;
+                }
+                if (!$lastId) {
+                    $lastId = $dialog['top_message'];
+                }
+                foreach ($res['messages'] as $message) {
+                    $idBot = yield $mp->getId($message);
+                    if (
+                        $message['_'] !== 'messageEmpty' &&
+                        $idBot  === $lastPeer            &&
+                        $lastId  == $message['id']
+                    ) {
+                        $lastDate = $message['date'];
+                        break;
+                    }
+                }
+            }
+        }
+        if ($lastDate) {
+            $params['offset_date'] = $lastDate;
+            $params['offset_peer'] = $lastPeer;
+            $params['offset_id']   = $lastId;
+        } else {
+            //yield $mp->echo('*** NO LAST-DATE EXISTED'.PHP_EOL);
+            yield $mp->logger('*** All ' . $totalDialogs . ' Dialogs fetched. EXITING ...', Logger::ERROR);
+            break;
+        }
+        if (!isset($res['count'])) {
+            //yield $mp->echo('*** All ' . $totalDialogs . ' Dialogs fetched. EXITING ...'.PHP_EOL);
+            yield $mp->logger('*** All ' . $totalDialogs . ' Dialogs fetched. EXITING ...', Logger::ERROR);
+            break;
+        }
+        if ($pauseMin > 0 || $pauseMax > 0) {
+            $pause = $pauseMax <= $pauseMin ? $pauseMin : rand($pauseMin, $pauseMax);
+            //yield $mp->echo("Pausing for $pause seconds. ...".PHP_EOL);
+            yield $mp->logger("Pausing for $pause seconds. ...", Logger::ERROR);
+            yield $mp->sleep($pause);
+        }
+    } // end of while/for
+    //echo('Exiting telegram2dialogSlices!'.PHP_EOL);
+    //yield $mp->logger('Exiting telegram2dialogSlices!', Logger::ERROR);
+}
+
+
+function visitDialogs($mp, array $params, callable $callback): \Generator
+{
+    //yield $mp->logger("Entered VisitDialogs:" . toJSON($params, false), Logger::ERROR);
+    yield telegram2dialogSlices($mp, $params, function (int $totalDialogs, array $dialogs, array $messages, array $chats, array $users) use ($callback, $mp): Generator {
+        //yield $mp->logger("Entered telegram2dialogSlices.", Logger::ERROR);
+        //yield $mp->echo("Entered telegram2dialogSlices." . PHP_EOL);
+        $index = 0;
+        foreach ($dialogs as $dialog) {
+            $peer = $dialog['peer'];
+            switch ($peer['_']) {
+                case 'peerUser':
+                    $peerId = $peer['user_id'];
+                    foreach ($users as $user) {
+                        if ($peerId === $user['id']) {
+                            $subtype = ($user['bot'] ?? false) ? 'bot' : 'user';
+                            $title   = '';
+                            $peerval = $user;
+                            break 2;
+                        }
+                    }
+                    throw new Exception("Missing user: '$peerId'");
+                case 'peerChat':
+                case 'peerChannel':
+                    $peerId = $peer['_'] === 'peerChat' ? $peer['chat_id'] : $peer['channel_id'];
+                    foreach ($chats as $chat) {
+                        if ($chat['id'] === $peerId) {
+                            $peerval = $chat;
+                            switch ($chat['_']) {
+                                case 'chatEmpty':
+                                    $subtype = $chat['_'];
+                                    $title   = '';
+                                    break;
+                                case 'chat':
+                                    $subtype = 'basicgroup';
+                                    $title   = '';
+                                    break;
+                                case 'chatForbidden':
+                                    $subtype = $chat['_'];
+                                    $title   = '';
+                                    break;
+                                case 'channel':
+                                    $subtype = ($chat['megagroup'] ?? false) ? 'supergroup' : 'channel';
+                                    $title   = '';
+                                    break;
+                                case 'channelForbidden':
+                                    $subtype = $chat['_'];
+                                    $title   = '';
+                                    break;
+                                default:
+                                    throw new Exception("Unknown subtype: '$peerId'  '" . $chat['_'] . "'");
+                            }
+                            break 2;
+                        }
+                    }
+                    throw new Exception("Missing chat: '$peerId'");
+                default:
+                    throw new Exception("Invalid peer type: '" . $peer['_'] . "'");
+            }
+            yield $callback($totalDialogs, $index, $peerId, $subtype, $title, $peerval);
+            $index += 1;
+        }
+    });
+}
+
+
+
 class EventHandler extends MadelineEventHandler
 {
     private $startTime;
     private $stopTime;
 
-    private $robotId;     // id of the account which registered this app.
-    private $owner;       // id or username of the owner of the robot.
+    private $robotId;     // id of this worker.
+
+    private $owner;       // id or username of the owner of the workers.
     private $officeId;    // id of the office channel;
-    private $admins;      // ids of the accounts which heave admin rights.
+    private $admins;      // ids of the users which have admin rights to issue commands.
+    private $workers;     // ids of the userbots which take orders from admins to execute commands.
     private $reportPeers; // ids of the support people who will receive the errors.
 
-    private $notifState = true; // true: Notify; false: Never notify.
-    private $notifAge   = 30;   // 30 => Delete the notifications after 30 seconds;  0 => Never Delete.
+    private $notifState;  // true: Notify; false: Never notify.
+    private $notifAge;    // 30 => Delete the notifications after 30 seconds;  0 => Never Delete.
 
     private $oldAge = 2;
 
@@ -361,9 +572,13 @@ class EventHandler extends MadelineEventHandler
 
         $this->startTime = time();
         $this->stopTime  = 0;
+
         $this->officeId  = 1373853876;
         $this->ownerId   =  157887279;
-        //$this->admins = [906097988, 157887279];
+        $this->admins = [906097988, 157887279, 1087968824];
+
+        $this->notifState = false;
+        $this->notifAge   = 0;
     }
 
     public function onStart(): \Generator
@@ -382,11 +597,10 @@ class EventHandler extends MadelineEventHandler
         }
         //yield $this->logger(toJSON($robot, false), Logger::ERROR);
 
-        //$this->ownerId   = $this->robotId;
-        $this->admins      = [$this->robotId, $this->ownerId];
+        //$this->admins      = [$this->robotId, $this->ownerId];
         $this->reportPeers = [$this->robotId];
 
-        $this->setReportPeers($this->reportPeers);
+        //$this->setReportPeers($this->reportPeers);
 
         $this->processCommands  = false;
         $this->updatesProcessed = 0;
@@ -413,6 +627,7 @@ class EventHandler extends MadelineEventHandler
         $notifState = $this->notifState();
         $notifAge   = $this->notifAge();
         $dest       = $this->robotId;
+        //$this->logger("Notif {state:" . ($notifState ? 'ON' : 'OFF') . ", age:$notifAge}", Logger::ERROR);
         //yield sendAndDelete($eh, $dest, $text, $notifState, $notifAge);
         if ($notifState) {
             $result = yield $eh->messages->sendMessage([
@@ -505,14 +720,19 @@ class EventHandler extends MadelineEventHandler
         $verb    = $command['verb'];
         $params  = $command['params'];
 
-        $toOffice  = $peerType === 'peerChannel' && $peer['channel_id'] === $this->officeId && $msg;
-        $fromAdmin = $toOffice && in_array($fromId, $this->admins);
-        yield $this->logger($update, Logger::ERROR);
-        yield $this->logger($peer, Logger::ERROR);
-        yield $this->logger($this->admins, Logger::ERROR);
-        yield $this->logger("fromId: $fromId");
+        $toOffice  = $peerType === 'peerChannel' && $peer['channel_id'] === $this->officeId;
+        $fromAdmin = in_array($fromId, $this->admins);
+        if ($fromAdmin || $toOffice) {
+            yield $this->logger("admins: " . $this->admins[0] . ', ' . $this->admins[1] . ', ' . $this->admins[2], Logger::ERROR);
+            yield $this->logger("officeId:$this->officeId  robotId:$this->robotId", Logger::ERROR);
+            yield $this->logger("fromId: $fromId, toOffice:" . ($toOffice ? 'true' : 'false'), Logger::ERROR);
+            yield $this->logger(toJSON($update), Logger::ERROR);
+        }
 
-        switch ($fromAdmin && $verb ? $verb : '') {
+        switch ($fromAdmin && $toOffice && $verb ? $verb : '') {
+            case '':
+                // Not a verb and/or not sent by an admin.
+                break;
             case 'ping':
                 yield $this->messages->sendMessage([
                     'peer'            => $peer,
@@ -521,15 +741,13 @@ class EventHandler extends MadelineEventHandler
                 ]);
                 yield $this->logger("Command '/ping' successfuly executed at " . date('d H:i:s!'), Logger::ERROR);
                 break;
-            case '':
-                // Not a verb and/or not sent by an admin.
-                break;
             default:
                 $this->messages->sendMessage([
                     'peer'            => $peer,
                     'reply_to_msg_id' => $messageId,
                     'message'         => "Invalid command: '$msgOrig'"
                 ]);
+                yield $this->logger("Invalid Command '$msgOrig' rejected at " . date('d H:i:s!'), Logger::ERROR);
                 break;
         }
 
@@ -598,59 +816,76 @@ class EventHandler extends MadelineEventHandler
                     break;
                 case 'status':
                     $launch = yield getLastLaunch($this);
+                    if ($launch) {
+                        $lastLaunchMethod   = $launch[0];
+                        $lastLaunchDuration = "$launch[1] secs";
+                    } else {
+                        $lastLaunchMethod   = 'NOT AVAILABLE';
+                        $lastLaunchDuration = 'NOT AVAILABLE';
+                    }
                     $notif = 'OFF';
                     if ($this->notifState()) {
                         $notif = $this->notifAge() === 0 ? 'ON / Never wipe' : 'ON / Wipe in ' . $this->notifAge() . ' seconds';
                     }
-                    $stats  = SCRIPT_NAME . ' STATUS on ' . hostname() . ':' . PHP_EOL;
-                    $stats .= 'Script: '  . SCRIPT_NAME . ' ' . SCRIPT_VERSION . PHP_EOL;
-                    $stats .= 'Account: '  . $this->account              . PHP_EOL;
-                    $stats .= 'Uptime: '   . getUptime($this->startTime) . PHP_EOL;
-                    $stats .= 'Peak Memory: ' . getMemUsage(true)        . PHP_EOL;
-                    $stats .= 'Allowed Memory: ' . ini_get('memory_limit') . PHP_EOL;
-                    $stats .= 'CPU: '         . getCpuUsage()            . PHP_EOL;
-                    $stats .= 'Session Size: ' . getSessionSize(SESSION_FILE) . PHP_EOL;
-                    $stats .= 'Time: ' . date_default_timezone_get() . ' ' . date("d H:i:s") . PHP_EOL;
-                    $stats .= 'Updates: '  . $this->updatesProcessed . PHP_EOL;
-                    $stats .= 'Loop State: ' . ($this->getLoopState() ? 'ON' : 'OFF') . PHP_EOL;
+                    $stats  = '<b>STATUS:</b>  (Script: ' . SCRIPT_NAME . ' ' . SCRIPT_VERSION . ')<br>';
+                    $stats .= "Host: " . hostname() . "<br>";
+                    $stats .= "Account: $this->account<br>";
+                    $stats .= "Uptime: " . getUptime($this->startTime) . "<br>";
+                    $stats .= 'Peak Memory: ' . getMemUsage(true) . '<br>';
+                    $stats .= 'Allowed Memory: ' . ini_get('memory_limit') . '<br>';
+                    $stats .= 'CPU: '         . getCpuUsage()            . '<br>';
+                    $stats .= 'Session Size: ' . getSessionSize(SESSION_FILE) . '<br>';
+                    $stats .= 'Time: ' . date_default_timezone_get() . ' ' . date("d H:i:s") . '<br>';
+                    $stats .= 'Updates: '  . $this->updatesProcessed . '<br>';
+                    $stats .= 'Loop State: ' . ($this->getLoopState() ? 'ON' : 'OFF') . '<br>';
                     $stats .= 'Notification: ' . $notif . PHP_EOL;
-                    $stats .= 'Launch Method: ' . getLaunchMethod() . PHP_EOL;
-                    $stats .= 'Last Launch: ' . ($launch ?? 'NOT APPLICABLE') . PHP_EOL;
+                    $stats .= 'Launch Method: ' . getLaunchMethod() . '<br>';
+                    $stats .= 'Previous Launch Method: '   . $lastLaunchMethod . '<br>';
+                    $stats .= 'Previous Launch Duration: ' . $lastLaunchDuration . '<br>';
                     //$this->echo(toJSON($peer, false));
                     yield $this->messages->editMessage([
-                        'peer'    => $peer,
-                        'id'      => $messageId,
-                        'message' => $stats,
+                        'peer'       => $peer,
+                        'id'         => $messageId,
+                        'message'    => $stats,
+                        'parse_mode' => 'HTML',
                     ]);
                     yield $this->logger("Command '/status' successfuly executed at " . date('d H:i:s!'), Logger::ERROR);
                     break;
                 case 'stats':
-                    if (false) {
-                        $peerCounts      = [
-                            'user' => 0, 'bot' => 0, 'chat' => 0, 'supergroup' => 0, 'channel' => 0,
-                            'chatForbidden' => 0, 'channelForbidden' => 0
-                        ];
-                        $params['mp']        = $this;
-                        $params['limit']     = 100;
-                        $params['pause_min'] =   0;
-                        $params['pause_max'] =   0;
-                        yield enumeratePeers($params, function (array $base, array $extension) use (&$peerCounts) {
-                            $peerCounts[$base['subtype']] += 1;
-                        });
-                        $stats  = 'STATISTICS' . PHP_EOL;
-                        $stats  = SCRIPT_NAME . ' STATISTICS on ' . hostname() . ':' . PHP_EOL;
-                        $stats .= 'Users: '       . $peerCounts['user']         . PHP_EOL;
-                        $stats .= 'Bots: '        . $peerCounts['bot']          . PHP_EOL;
-                        $stats .= 'Chats: '       . $peerCounts['chat']         . PHP_EOL;
-                        $stats .= 'Supergroups: ' . $peerCounts['supergroup']   . PHP_EOL;
-                        $stats .= 'channels: '    . $peerCounts['channel']      . PHP_EOL;
-                    } else {
-                        $stats = 'To Be Implemented';
-                    }
+                    $totalDialogsOut = 0;
+                    $peerCounts   = [
+                        'user' => 0, 'bot' => 0, 'basicgroup' => 0, 'supergroup' => 0, 'channel' => 0,
+                        'chatForbidden' => 0, 'channelForbidden' => 0
+                    ];
+                    $params = [];
+                    //$params['limit']       = 100;
+                    //$params['max_dialogs'] = 200;
+                    //$params['pause_min']   =   0;
+                    //$params['pause_max']   =   0;
+                    yield visitDialogs(
+                        $this,
+                        $params,
+                        function (int $totalDialogs, int $index, int $peerId, string $subtype, string $title, ?array $peerval)
+                        use (&$totalDialogsOut, &$peerCounts): void {
+                            $totalDialogsOut = $totalDialogs;
+                            $peerCounts[$subtype] += 1;
+                        }
+                    );
+                    $stats  = '<b>STATISTICS</b>  (Script: ' . SCRIPT_NAME . ' ' . SCRIPT_VERSION . ')<br>';
+                    $stats .= "Account: $this->account<br>";
+                    $stats .= "Total Dialogs: $totalDialogsOut<br>";
+                    $stats .= "Users: {$peerCounts['user']}<br>";
+                    $stats .= "Bots: {$peerCounts['bot']}<br>";
+                    $stats .= "Basic groups: {$peerCounts['basicgroup']}<br>";
+                    $stats .= "Forbidden Basic groups: {$peerCounts['chatForbidden']}<br>";
+                    $stats .= "Supergroups: {$peerCounts['supergroup']}<br>";
+                    $stats .= "channels: {$peerCounts['channel']}<br>";
+                    $stats .= "Forbidden Supergroups or channels: {$peerCounts['channelForbidden']}<br>";
                     yield $this->messages->editMessage([
-                        'peer'    => $peer,
-                        'id'      => $messageId,
-                        'message' => $stats,
+                        'peer'       => $peer,
+                        'id'         => $messageId,
+                        'message'    => $stats,
+                        'parse_mode' => 'HTML',
                     ]);
                     break;
                 case 'loop':
@@ -757,6 +992,8 @@ class EventHandler extends MadelineEventHandler
     } // end of function
 } // end of the class
 
+set_error_handler('errHandle');
+
 if (PHP_SAPI !== 'cli') {
     error_log("Robot's URL: '" . getURL() . "' SERVER_NAME: '" . getWebServerName() . "'");
 }
@@ -793,6 +1030,11 @@ $settings['app_info']['app_version']    = SCRIPT_NAME . ' ' . SCRIPT_VERSION;
 $settings['app_info']['system_version'] =  hostname() . ' ' . getLaunchMethod();
 $madelineProto = new API(SESSION_FILE, $settings);
 $madelineProto->async(true);
+
+if ($madelineProto->authorized !== MTProto::LOGGED_IN) {
+    //echo ("Authorization:'$madelineProto->authorized'" . PHP_EOL);
+    //exit("App is not authorized.");
+}
 
 $genLoop = new GenericLoop(
     $madelineProto,
