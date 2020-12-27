@@ -1089,7 +1089,7 @@ if (!file_exists('data/startups.txt')) {
     fclose($handle);
 }
 
-$settings['logger']['logger_level'] = Logger::ERROR;
+$settings['logger']['logger_level'] = Logger::NOTICE;
 $settings['logger']['logger'] = Logger::FILE_LOGGER;
 $settings['peer']['full_info_cache_time'] = 60;
 $settings['serialization']['cleanup_before_serialization'] = true;
@@ -1097,6 +1097,7 @@ $settings['serialization']['serialization_interval'] = 60;
 $settings['app_info']['app_version']    = SCRIPT_NAME . ' ' . SCRIPT_VERSION;
 $settings['app_info']['system_version'] =  hostname() . ' ' . PHP_SAPI === 'cli' ? 'CLI' : "WEB";
 $madelineProto = new API(SESSION_FILE, $settings);
+$madelineProto->logger("API object created!");
 if (!$madelineProto) {
     Logger::log("Strange! MadelineProto object is null. exiting ....", Logger::ERROR);
     exit("Unsuccessful MadelineProto Object creation.");
