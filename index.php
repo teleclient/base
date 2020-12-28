@@ -14,12 +14,12 @@ ini_set('log_errors',             '1');               // Error logging engine
 ini_set('error_log',              'MadelineProto.log'); // Logging file path
 
 if (\file_exists('vendor/autoload.php')) {
-    include 'vendor/autoload.php';
+    require_once 'vendor/autoload.php';
 } else {
     if (!\file_exists('madeline.php')) {
         \copy('https://phar.madelineproto.xyz/madeline.php', 'madeline.php');
     }
-    include 'madeline.php';
+    require_once 'madeline.php';
 }
 
 define("SCRIPT_NAME",    'Base');
@@ -1005,7 +1005,7 @@ class EventHandler extends MadelineEventHandler
                     $date = $result['date'];
                     $this->logout();
                 case 'stop':
-                    $result = yield $this->messages->editMessage([
+                    yield $this->messages->editMessage([
                         'peer'    => $peer,
                         'id'      => $messageId,
                         'message' => 'Robot is stopping ...',
@@ -1052,6 +1052,12 @@ class EventHandler extends MadelineEventHandler
 
         //Function: Finnish executing the Stop command.
         if ($byRobot && $msgOrig === 'Robot is stopping ...') {
+            $result = yield $this->messages->editMessage([
+                'peer'    => $peer,
+                'id'      => $messageId,
+                'message' => 'Robot is stopped!',
+            ]);
+            $this->logger(toJSON($result), Logger::ERROR);
             if (Shutdown::removeCallback('restarter')) {
                 yield $this->logger('Self-Restarter disabled.', Logger::ERROR);
             }
