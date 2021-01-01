@@ -1,0 +1,3 @@
+
+MTProto, WebWarp: While reporting to 157887279: 
+Telegram returned an RPC error: FLOOD_WAIT_X (420) (FLOOD_WAIT_112)

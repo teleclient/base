@@ -5,7 +5,6 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Tehran');
 ignore_user_abort(true);
-set_time_limit(0);
 error_reporting(E_ALL);                               // always TRUE
 ini_set('ignore_repeated_errors', '1');               // always TRUE
 ini_set('display_startup_errors', '1');
@@ -23,7 +22,7 @@ if (\file_exists('vendor/autoload.php')) {
 }
 
 define("SCRIPT_NAME",    'Base');
-define("SCRIPT_VERSION", 'V1.2.1');
+define("SCRIPT_VERSION", 'V1.2.2');
 define('SESSION_FILE',   'session.madeline');
 define('SERVER_NAME',    '');
 define('SAPI_NAME', (PHP_SAPI === 'cli') ? (isset($_SERVER['TERM']) ? 'Shell' : 'Cron') : 'Web');
@@ -38,7 +37,7 @@ use \danog\MadelineProto\Magic;
 use \danog\MadelineProto\Loop\Generic\GenericLoop;
 use \danog\MadelineProto\MTProto;
 use \danog\MadelineProto\RPCErrorException;
-use function\Amp\File\{get, put, exists};
+use function\Amp\File\{get, put, exists, getSize};
 
 function toJSON($var, bool $pretty = true): string
 {
@@ -79,25 +78,51 @@ function getUptime(int $start, int $end = 0): string
     return $ageStr;
 }
 
-function getMemUsage($peak = false): string
+function getMemUsage(bool $peak = false): int
 {
     $memUsage = $peak ? memory_get_peak_usage(true) : memory_get_usage(true);
+    return $memUsage;
+}
+
+function getFileSize($file)
+{
+    $size = filesize($file);
+    if ($size < 0) {
+        if (!(strtoupper(substr(PHP_OS, 0, 3)) == 'WIN'))
+            $size = trim(`stat -c%s $file`);
+        else {
+            $fsobj = new COM("Scripting.FileSystemObject");
+            $f = $fsobj->GetFile($file);
+            $size = $file->Size;
+        }
+    }
+    return $size;
+}
+
+function getSizeString(int $size): string
+{
+    $unit = array('Bytes', 'KB', 'MB', 'GB', 'TB', 'PB');
+    $mem  = $size !== 0 ? round($size / pow(1024, ($x = floor(log($size, 1024)))), 2) . ' ' . $unit[$x] : 'UNAVAILABLE';
+    return $mem;
+    /*
     if ($memUsage === 0) {
         $memUsage = '_UNAVAILABLE_';
     } elseif ($memUsage < 1024) {
         $memUsage .= 'B';
     } elseif ($memUsage < 1048576) {
-        $memUsage = round($memUsage / 1024, 2) . 'K';
+        $memUsage = round($memUsage / 1024, 2) . 'KB';
     } else {
-        $memUsage = round($memUsage / 1048576, 2) . 'M';
+        $memUsage = round($memUsage / 1048576, 2) . 'MB';
     }
-    return $memUsage;
+    */
 }
 
-function getSessionSize(string $sessionFile): string
+function getSessionSize(string $sessionFile): int
 {
     clearstatcache(true, $sessionFile);
     $size = filesize($sessionFile);
+    return $size !== false ? $size : 0;
+
     if ($size === false) {
         $sessionSize = '_UNAVAILABLE_';
     } elseif ($size < 1024) {
@@ -116,7 +141,7 @@ function getCpuUsage(): string
         $load = sys_getloadavg();
         return $load[0] . '%';
     } else {
-        return '_UNAVAILABLE_';
+        return 'UNAVAILABLE';
     }
 }
 
@@ -151,6 +176,59 @@ function secondsToNexMinute($now = null): int
     $next  = (int)ceil($now / 60) * 60;
     $delay = $next - $now;
     return $delay > 0 ? $delay : 60;
+}
+
+class ArrayInt64
+{
+    private $_backing = '';
+
+    public function __construct()
+    {
+        assert(PHP_INT_SIZE === 8, 'Class requires 64-bit integer support');
+    }
+
+    public function append(int $item): void
+    {
+        $this->_backing .= pack('P', $item);
+    }
+
+    public function count(): int
+    {
+        return $this->_binary_strlen($this->_backing) / PHP_INT_SIZE;
+    }
+
+    public function get(int $index): ?int
+    {
+        if (!is_numeric($index)) {
+            return null;
+        }
+        if ($index >= $this->count()) {
+            return null;
+        }
+
+        $packed = $this->_binary_substr($this->_backing, $index * PHP_INT_SIZE, PHP_INT_SIZE);
+        $unpacked = unpack('P', $packed);
+        if (is_array($unpacked)) {
+            return array_shift($unpacked);
+        }
+        return null;
+    }
+
+    protected function _binary_strlen(string $str): int
+    {
+        if (function_exists('mb_internal_encoding') && (ini_get('mbstring.func_overload') & 2)) {
+            return mb_strlen($str, '8bit');
+        }
+        return strlen($str);
+    }
+
+    protected function _binary_substr(string $str, int $start, int $length = null): string
+    {
+        if (function_exists('mb_internal_encoding') && (ini_get('mbstring.func_overload') & 2)) {
+            return mb_substr($str, $start, $length, '8bit');
+        }
+        return substr($str, $start, $length);
+    }
 }
 
 function parseCommand(string $msg, string $prefixes = '!/', int $maxParams = 3): array
@@ -203,11 +281,20 @@ function getLastLaunch(EventHandler $eh): Generator
     $content  = substr($content, 1);
     $launches = explode("\n", $content);
     yield $eh->logger("Launches Count:" . count($launches), Logger::ERROR);
-    $launch = explode(' ', trim(end($launches)));
-    if (count($launch) !== 2) {
+    $values = explode(' ', trim(end($launches)));
+    if (count($values) !== 4) {
         throw new Exception("Invalid launch information .");
     }
+    $launch['stop']     = intval($values[0]);
+    $launch['method']   = $values[1];
+    $launch['duration'] = intval($values[2]);
+    $launch['memory']   = intval($values[3]);
     return $launch;
+}
+
+function newVisitor($fromId): bool
+{
+    return true;
 }
 
 function getWebServerName(): ?string
@@ -502,7 +589,7 @@ function visitDialogs($mp, array $params, callable $callback): \Generator
         $mp,
         $params,
         function (
-            int $totalDialogs,
+            int   $totalDialogs,
             array $dialogs,
             array $messages,
             array $chats,
@@ -512,8 +599,9 @@ function visitDialogs($mp, array $params, callable $callback): \Generator
             //yield $mp->logger("Entered telegram2dialogSlices.", Logger::ERROR);
             //yield $mp->echo("Entered telegram2dialogSlices." . PHP_EOL);
             $index = 0;
-            foreach ($dialogs as $dialog) {
-                $peer = $dialog['peer'];
+            foreach ($dialogs as $idx => $dialog) {
+                $peer    = $dialog['peer'];
+                $message = $messages[$idx] ?? null;
                 switch ($peer['_']) {
                     case 'peerUser':
                         $peerId = $peer['user_id'];
@@ -522,9 +610,9 @@ function visitDialogs($mp, array $params, callable $callback): \Generator
                                 $subtype = ($user['bot'] ?? false) ? 'bot' : 'user';
                                 $peerval = $user;
                                 if (isset($user['username'])) {
-                                    $name = $user['username'];
-                                } elseif (($user['first_name'] ?? '') !== '' || ($user['first_name'] ?? '') !== '') {
-                                    $name = trim(($user['first_name'] ?? '') . ' ' . ($user['first_name'] ?? ''));
+                                    $name = '@' . $user['username'];
+                                } elseif (($user['first_name'] ?? '') !== '' || ($user['last_name'] ?? '') !== '') {
+                                    $name = trim(($user['first_name'] ?? '') . ' ' . ($user['last_name'] ?? ''));
                                 } elseif (isset($chat['id'])) {
                                     $name = strval($user['id']);
                                 } else {
@@ -575,7 +663,7 @@ function visitDialogs($mp, array $params, callable $callback): \Generator
                     default:
                         throw new Exception("Invalid peer type: '" . $peer['_'] . "'");
                 }
-                yield $callback($totalDialogs, $index, $peerId, $subtype, $name, $peerval);
+                yield $callback($totalDialogs, $index, $peerId, $subtype, $name, $peerval, $message);
                 $index += 1;
             }
         }
@@ -595,8 +683,8 @@ class EventHandler extends MadelineEventHandler
     private $workers;     // ids of the userbots which take orders from admins to execute commands.
     private $reportPeers; // ids of the support people who will receive the errors.
 
-    private $notifState;  // true: Notify; false: Never notify.
-    private $notifAge;    // 30 => Delete the notifications after 30 seconds;  0 => Never Delete.
+    //private $notifState;  // true: Notify; false: Never notify.
+    //private $notifAge;    // 30 => Delete the notifications after 30 seconds;  0 => Never Delete.
 
     private $oldAge = 2;
 
@@ -611,8 +699,8 @@ class EventHandler extends MadelineEventHandler
         //$this->ownerId   =  157887279;
         //$this->admins = [906097988, 157887279, 1087968824];
 
-        $this->notifState = false;
-        $this->notifAge   = 0;
+        //$this->notifState = false;
+        //$this->notifAge   = 0;
     }
 
     public function onStart(): \Generator
@@ -633,8 +721,6 @@ class EventHandler extends MadelineEventHandler
         $this->ownerId     = $this->robotId;
         $this->admins      = [$this->robotId];
         $this->reportPeers = [$this->robotId];
-
-        $this->setReportPeers($this->reportPeers);
 
         $this->processCommands  = false;
         $this->updatesProcessed = 0;
@@ -658,11 +744,11 @@ class EventHandler extends MadelineEventHandler
             return;
         }
         $text = SCRIPT_NAME . ' ' . SCRIPT_VERSION . ' started at ' . $nowstr . ' on ' . hostName() . ' using ' . $this->account . ' account.';
-        $notifState = $this->notifState();
-        $notifAge   = $this->notifAge();
+
+        $notif      = $this->getNotif();
+        $notifState = $notif['state'];
+        $notifAge   = $notif['age'];
         $dest       = $this->robotId;
-        //$this->logger("Notif {state:" . ($notifState ? 'ON' : 'OFF') . ", age:$notifAge}", Logger::ERROR);
-        //yield sendAndDelete($eh, $dest, $text, $notifState, $notifAge);
         if ($notifState) {
             $result = yield $eh->messages->sendMessage([
                 'peer'    => $dest,
@@ -685,6 +771,83 @@ class EventHandler extends MadelineEventHandler
                 })());
             }
         }
+
+        $launch = yield getLastLaunch($this);
+        $lastStopTime       = $launch['stop']    ?? 0;
+        $lastLaunchMethod   = $launch['method']  ?? null;
+        $lastLaunchDuration = $launch['duration'] ?? 0;
+        $lastPeakMemory     = $launch['memory']  ?? 0;
+
+        $totalDialogsOut = 0;
+        $peerCounts   = [
+            'user' => 0, 'bot' => 0, 'basicgroup' => 0, 'supergroup' => 0, 'channel' => 0,
+            'chatForbidden' => 0, 'channelForbidden' => 0
+        ];
+        $mp = $this;
+        $currentUserIds = [];
+        $lastMessages = [];
+        yield visitDialogs(
+            $this,
+            ['max_dialogs' => 20],
+            function (int $totalDialogs, int $index, int $peerId, string $subtype, string $name, ?array $peerval, ?array $message)
+            use ($mp, &$totalDialogsOut, &$peerCounts, &$currentUserIds, &$lastMessages): void {
+                $totalDialogsOut = $totalDialogs;
+                $peerCounts[$subtype] += 1;
+                switch ($subtype) {
+                    case 'bot':
+                    case 'basicgroup':
+                    case 'supergroup':
+                    case 'channel':
+                    case 'chatForbidden':
+                    case 'channelForbidden':
+                        break;
+                    case 'user':
+                        if (!$peerval['self'] && $peerId !== 777000) {
+                            //$out = ['peer_id' => $peerId, 'name' => $name, 'peerval' => $peerval, 'message' => $message];
+                            //$mp->logger(toJSON($out), Logger::ERROR);
+                            $currentUserIds[] = $peerId;
+                            $lastMessages[]   = $message;
+                        }
+                        break;
+                }
+            }
+        );
+        yield $this->logger("Count of users: " . count($currentUserIds), Logger::ERROR);
+
+        foreach ($lastMessages as $idx => $message) {
+            //$message = $lastMessages[$idx] ?? null;
+            if ($message && ($message['from_id']) !== $this->getRobotId()) {
+                //yield $this->logger("Last Message: " . toJSON($message, false), Logger::ERROR);
+                $res = yield $this->messages->getHistory([
+                    'peer'        => $message,
+                    'limit'       => 4,
+                    'offset_id'   => 0,
+                    'offset_date' => 0,
+                    'add_offset'  => 0,
+                    'max_id'      => 0,
+                    'min_id'      => 0,
+                ]);
+                //yield $this->logger("getHistory Result: " . toJSON($res), Logger::ERROR);
+                $messages = $res['messages'];
+                $chats    = $res['chats'];
+                $users    = $res['users'];
+
+                $isNew = true;
+                foreach ($res['messages'] as $msg) {
+                    if ($msg['from_id'] === $this->getRobotId()) {
+                        $isNew = false;
+                    }
+                }
+                if ($isNew) {
+                    yield $this->logger("New User: " . toJSON($message), Logger::ERROR);
+                } else {
+                    //yield $this->logger("Old User: " . toJSON($message), Logger::ERROR);
+                }
+            }
+        }
+        yield $this->logger(" ", Logger::ERROR);
+
+        $this->setReportPeers($this->reportPeers);
     }
 
     public function getRobotID(): int
@@ -702,15 +865,17 @@ class EventHandler extends MadelineEventHandler
         $this->__set('loop_state', $loopState);
     }
 
-    public function notifState(): bool
+    public function getNotif(): array
     {
-        return $this->notifState;
+        $notif['state'] = $this->__get('notif_state');
+        $notif['age']   = $this->__get('notif_age');
+        return $notif;
     }
-    public function notifAge(): int
+    public function setNotif($state, $age = null): void
     {
-        return $this->notifAge;
+        $this->__set('notif_state', $state);
+        $this->__set('notif_age',   $age);
     }
-
 
     public function onUpdateEditMessage($update)
     {
@@ -745,6 +910,7 @@ class EventHandler extends MadelineEventHandler
         $peer         = $update['message']['to_id'] ?? null;
         $byRobot      = $fromId    === $this->robotId && $msg;
         $toRobot      = $peerType  === 'peerUser' && $peer['user_id'] === $this->robotId && $msg;
+        $byVisitor    = !$byRobot && $toRobot;
         $replyToRobot = $replyToId === $this->robotId && $msg;
         $this->updatesProcessed += 1;
         $moment = time();
@@ -776,13 +942,36 @@ class EventHandler extends MadelineEventHandler
                 yield $this->logger("Command '/ping' successfuly executed at " . date('d H:i:s!'), Logger::ERROR);
                 break;
             default:
-                $this->messages->sendMessage([
+                yield $this->messages->sendMessage([
                     'peer'            => $peer,
                     'reply_to_msg_id' => $messageId,
                     'message'         => "Invalid command: '$msgOrig'"
                 ]);
                 yield $this->logger("Invalid Command '$msgOrig' rejected at " . date('d H:i:s!'), Logger::ERROR);
                 break;
+        }
+
+        if ($byVisitor) {
+            yield $this->logger(toJSON($update), Logger::ERROR);
+            if (newVisitor($fromId)) {
+                /*
+                yield $this->messages->sendMessage([
+                    'peer'            => $fromId,
+                    'reply_to_msg_id' => $messageId,
+                    'message'         => "Hello! My name is Sara. What's your name?. '"
+                ]);
+                */
+                yield $this->logger("Replied to a new visitor", Logger::ERROR);
+            } else {
+                /*
+                yield $this->messages->sendMessage([
+                    'peer'            => $fromId,
+                    'reply_to_msg_id' => $messageId,
+                    'message'         => "Hi, John! What's new?'"
+                ]);
+                */
+                yield $this->logger("Replied to an existing visitor", Logger::ERROR);
+            }
         }
 
         // Recognize and log old or new commands and reactions.
@@ -835,6 +1024,8 @@ class EventHandler extends MadelineEventHandler
                             '   To query the status of the robot.<br>' .
                             '>> <b>/stats</b><br>' .
                             '   To query the statistics of the robot.<br>' .
+                            '>> <b>/notif OFF / ON 20</b><br>' .
+                            '   No event notification or notify every 20 secs.<br>' .
                             '>> <b>/crash</b><br>' .
                             '   To generate an exception for testing.<br>' .
                             '>> <b>/restart</b><br>' .
@@ -849,42 +1040,53 @@ class EventHandler extends MadelineEventHandler
                     yield $this->logger("Command '/help' successfuly executed at " . date('d H:i:s!'), Logger::ERROR);
                     break;
                 case 'status':
-                    $currentMemUsage = getMemUsage(true);
+                    $currentMemUsage = getSizeString(getMemUsage(true));
+                    $peakMemUsage    = getSizeString(getMemUsage());
+                    $memoryLimit     = ini_get('memory_limit');
+                    $sessionSize     = getSizeString(getSessionSize(SESSION_FILE));
                     $launch = yield getLastLaunch($this);
                     if ($launch) {
-                        $lastLaunchMethod   = $launch[0];
-                        $lastLaunchDuration = "$launch[1] secs";
+                        $lastStopTime       = strval($launch['stop']);
+                        $lastLaunchMethod   = $launch['method'];
+                        $lastLaunchDuration = strval($launch['duration']) . " secs";
+                        $lastPeakMemory     = getSizeString($launch['memory']);
                     } else {
+                        $lastStopTime       = 'NOT AVAILABLE';
                         $lastLaunchMethod   = 'NOT AVAILABLE';
                         $lastLaunchDuration = 'NOT AVAILABLE';
+                        $lastPeakMemory     = 'NOT AVAILABLE';
                     }
-                    $notif = 'OFF';
-                    if ($this->notifState()) {
-                        $notif = $this->notifAge() === 0 ? 'ON / Never wipe' : 'ON / Wipe in ' . $this->notifAge() . ' seconds';
+                    $notif = $this->getNotif();
+                    $notifStr = 'OFF';
+                    if ($notif['state']) {
+                        $notifAge = $notif['age'];
+                        $notifStr = $notifAge === 0 ? "ON / Never wipe" : "ON / Wipe after $notifAge secs.";
                     }
                     //yield $this->echo("Robot's Id: '" . ($this->robotId? $this->Robot ) . '!' . PHP_EOL);
-                    $stats  = '<b>STATUS:</b>  (Script: ' . SCRIPT_NAME . ' ' . SCRIPT_VERSION . ')<br>';
-                    $stats .= "Host: " . hostname() . "<br>";
-                    $stats .= "Robot's User-Name: $this->account<br>";
-                    $stats .= "Robot's User-Id: $this->robotId<br>";
-                    $stats .= "Uptime: " . getUptime($this->startTime) . "<br>";
-                    $stats .= 'Peak Memory: ' . getMemUsage(true) . '<br>';
-                    $stats .= "Current Memory: $currentMemUsage<br>";
-                    $stats .= 'Allowed Memory: ' . ini_get('memory_limit') . '<br>';
-                    $stats .= 'CPU: '         . getCpuUsage()            . '<br>';
-                    $stats .= 'Session Size: ' . getSessionSize(SESSION_FILE) . '<br>';
-                    $stats .= 'Time: ' . date_default_timezone_get() . ' ' . date("d H:i:s") . '<br>';
-                    $stats .= 'Updates: '  . $this->updatesProcessed . '<br>';
-                    $stats .= 'Loop State: ' . ($this->getLoopState() ? 'ON' : 'OFF') . '<br>';
-                    $stats .= 'Notification: ' . $notif . PHP_EOL;
-                    $stats .= 'Launch Method: ' . getLaunchMethod() . '<br>';
-                    $stats .= 'Previous Launch Method: '   . $lastLaunchMethod . '<br>';
-                    $stats .= 'Previous Launch Duration: ' . $lastLaunchDuration . '<br>';
+                    $status  = '<b>STATUS:</b>  (Script: ' . SCRIPT_NAME . ' ' . SCRIPT_VERSION . ')<br>';
+                    $status .= "Host: " . hostname() . "<br>";
+                    $status .= "Robot's User-Name: $this->account<br>";
+                    $status .= "Robot's User-Id: $this->robotId<br>";
+                    $status .= "Uptime: " . getUptime($this->startTime) . "<br>";
+                    $status .= "Peak Memory: $peakMemUsage<br>";
+                    $status .= "Current Memory: $currentMemUsage<br>";
+                    $status .= "Allowed Memory: $memoryLimit<br>";
+                    $status .= 'CPU: '         . getCpuUsage()            . '<br>';
+                    $status .= "Session Size: $sessionSize<br>";
+                    $status .= 'Time: ' . date_default_timezone_get() . ' ' . date("d H:i:s") . '<br>';
+                    $status .= 'Updates: '  . $this->updatesProcessed . '<br>';
+                    $status .= 'Loop State: ' . ($this->getLoopState() ? 'ON' : 'OFF') . '<br>';
+                    $status .= 'Notification: ' . $notifStr . PHP_EOL;
+                    $status .= 'Launch Method: ' . getLaunchMethod() . '<br>';
+                    $status .= 'Previous Stop Time: '       . $lastStopTime . '<br>';
+                    $status .= 'Previous Launch Method: '   . $lastLaunchMethod . '<br>';
+                    $status .= 'Previous Launch Duration: ' . $lastLaunchDuration . '<br>';
+                    $status .= 'Previous Peak Memory: '     . $lastPeakMemory . '<br>';
                     //$this->echo(toJSON($peer, false));
                     yield $this->messages->editMessage([
                         'peer'       => $peer,
                         'id'         => $messageId,
-                        'message'    => $stats,
+                        'message'    => $status,
                         'parse_mode' => 'HTML',
                     ]);
                     yield $this->logger("Command '/status' successfuly executed at " . date('d H:i:s!'), Logger::ERROR);
@@ -915,7 +1117,7 @@ class EventHandler extends MadelineEventHandler
                     yield visitDialogs(
                         $this,
                         $params,
-                        function (int $totalDialogs, int $index, int $peerId, string $subtype, string $name, ?array $peerval)
+                        function (int $totalDialogs, int $index, int $peerId, string $subtype, string $name, ?array $peerval, array $message)
                         use (&$totalDialogsOut, &$peerCounts): void {
                             $totalDialogsOut = $totalDialogs;
                             $peerCounts[$subtype] += 1;
@@ -976,6 +1178,45 @@ class EventHandler extends MadelineEventHandler
                         yield $this->logger($msg, Logger::ERROR);
                     }
                     break;
+                case 'notif':
+                    $param1 = strtolower($params[0] ?? '');
+                    $paramsCount = count($params);
+                    if (
+                        ($param1 !==  'on' && $param1 !== 'off' && $param1 !== 'state') ||
+                        ($param1  === 'on' && $paramsCount !== 2) ||
+                        ($param1  === 'on' && !ctype_digit($params['1'])) ||
+                        (($param1 === 'off' || $param1 === 'state') && $paramsCount !== 1)
+                    ) {
+                        yield $this->messages->editMessage([
+                            'peer'    => $peer,
+                            'id'      => $messageId,
+                            'message' => "The notif argument must be 'on 123', 'off, or 'state'.",
+                        ]);
+                        break;
+                    }
+                    switch ($param1) {
+                        case 'state':
+                            $notif = $this->getNotif();
+                            $notifState = $notif['state'];
+                            $notifAge   = $notif['age'];
+                            break;
+                        case 'on':
+                            $notifState = true;
+                            $notifAge   = intval($params[1]);
+                            $this->setNotif($notifState, $notifAge);
+                            break;
+                        case 'off':
+                            $notifState = false;
+                            $this->setNotif($notifState);
+                            break;
+                    }
+                    $message = "The notif is " . (!$notifState ? "OFF" : ("ON / $notifAge secs")) . "!";
+                    yield $this->messages->editMessage([
+                        'peer'    => $peer,
+                        'id'      => $messageId,
+                        'message' => $message,
+                    ]);
+                    break;
                 case 'restart':
                     if (PHP_SAPI === 'cli') {
                         $result = yield $this->messages->editMessage([
@@ -1010,22 +1251,6 @@ class EventHandler extends MadelineEventHandler
                         'id'      => $messageId,
                         'message' => 'Robot is stopping ...',
                     ]);
-                    break;
-                case 'contacts':
-                    $result = yield $this->contacts->getContacts();
-                    $totalCount  = count($result['users']);
-                    $mutualCount = 0;
-                    foreach ($result['users'] as $user) {
-                        $mutualCount += ($user['mutual_contact'] ?? false) ? 1 : 0;
-                    }
-                    unset($result);
-                    $msg = "Contacts: Total:$totalCount Mutual:$mutualCount";
-                    yield $this->messages->editMessage([
-                        'peer'    => $peer,
-                        'id'      => $messageId,
-                        'message' => $msg,
-                    ]);
-                    yield $this->logger($msg, Logger::ERROR);
                     break;
 
                     // Place your code below: =========================================
@@ -1095,7 +1320,7 @@ if (!file_exists('data/startups.txt')) {
     fclose($handle);
 }
 
-$settings['logger']['logger_level'] = Logger::NOTICE;
+$settings['logger']['logger_level'] = Logger::ERROR;
 $settings['logger']['logger'] = Logger::FILE_LOGGER;
 $settings['peer']['full_info_cache_time'] = 60;
 $settings['serialization']['cleanup_before_serialization'] = true;
@@ -1143,19 +1368,21 @@ $startTime    = \time();
 $launchesFile = \realpath('data/launches.txt');
 $tempId = Shutdown::addCallback(
     static function () use ($madelineProto, $robotName, $startTime, $launchesFile) {
-        $now      = time();
-        $duration = $now - $startTime;
+        $now          = time();
+        $duration     = $now - $startTime;
         $launchMethod = getLaunchMethod();
+        $memory       = getMemUsage(true);
+        echo ('Shutting down ....<br>' . PHP_EOL);
         $msg = $robotName . " stopped at " . date("d H:i:s", $now) . "!  Execution duration:" . gmdate('H:i:s', $duration);
         if ($madelineProto) {
             try {
                 $madelineProto->logger($msg, Logger::ERROR);
                 $madelineProto->logger("Launch Method:'$launchMethod'  Duration: $duration", Logger::ERROR);
                 $launchesHandle = fopen($launchesFile, 'a');
-                fwrite($launchesHandle, "\n$launchMethod $duration");
+                fwrite($launchesHandle, "\n$now $launchMethod $duration $memory");
             } catch (\Exception $e) {
                 Logger::log($msg, Logger::ERROR);
-                Logger::log($e, Logger::ERROR);
+                Logger::log($e,   Logger::ERROR);
             }
         } else {
             try {
