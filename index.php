@@ -50,15 +50,15 @@ function toJSON($var, bool $pretty = true): string
     return $json;
 }
 
-function errHandle($errNo, $errStr, $errFile, $errLine)
-{
-    $msg = "$errStr in $errFile on line $errLine";
-    if ($errNo == E_NOTICE || $errNo == E_WARNING) {
-        throw new ErrorException($msg, $errNo);
-    } else {
-        echo $msg;
-    }
-}
+//function errHandle($errNo, $errStr, $errFile, $errLine)
+//{
+//    $msg = "$errStr in $errFile on line $errLine";
+//    if ($errNo == E_NOTICE || $errNo == E_WARNING) {
+//        throw new ErrorException($msg, $errNo);
+//    } else {
+//        echo $msg;
+//    }
+//}
 
 function nowMilli()
 {
@@ -1291,7 +1291,7 @@ class EventHandler extends MadelineEventHandler
     } // end of function
 } // end of the class
 
-set_error_handler('errHandle');
+//set_error_handler('errHandle');
 
 if (PHP_SAPI !== 'cli') {
     error_log("Robot's URL: '" . getURL() . "' SERVER_NAME: '" . getWebServerName() . "'");
@@ -1328,11 +1328,11 @@ $settings['serialization']['serialization_interval'] = 60;
 $settings['app_info']['app_version']    = SCRIPT_NAME . ' ' . SCRIPT_VERSION;
 $settings['app_info']['system_version'] =  hostname() . ' ' . PHP_SAPI === 'cli' ? 'CLI' : "WEB";
 $madelineProto = new API(SESSION_FILE, $settings);
-$madelineProto->logger("API object created!");
 if (!$madelineProto) {
     Logger::log("Strange! MadelineProto object is null. exiting ....", Logger::ERROR);
     exit("Unsuccessful MadelineProto Object creation.");
 }
+$madelineProto->logger("API object created!", Logger::ERROR);
 $madelineProto->async(true);
 
 $genLoop = new GenericLoop(
