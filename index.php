@@ -104,17 +104,6 @@ function getSizeString(int $size): string
     $unit = array('Bytes', 'KB', 'MB', 'GB', 'TB', 'PB');
     $mem  = $size !== 0 ? round($size / pow(1024, ($x = floor(log($size, 1024)))), 2) . ' ' . $unit[$x] : 'UNAVAILABLE';
     return $mem;
-    /*
-    if ($memUsage === 0) {
-        $memUsage = '_UNAVAILABLE_';
-    } elseif ($memUsage < 1024) {
-        $memUsage .= 'B';
-    } elseif ($memUsage < 1048576) {
-        $memUsage = round($memUsage / 1024, 2) . 'KB';
-    } else {
-        $memUsage = round($memUsage / 1048576, 2) . 'MB';
-    }
-    */
 }
 
 function getSessionSize(string $sessionFile): int
@@ -292,11 +281,6 @@ function getLastLaunch(EventHandler $eh): Generator
     return $launch;
 }
 
-function newVisitor($fromId): bool
-{
-    return true;
-}
-
 function getWebServerName(): ?string
 {
     return $_SERVER['SERVER_NAME'] ?? null;
@@ -446,243 +430,6 @@ function checkTooManyRestarts(EventHandler $eh): Generator
     return $restartsCount;
 }
 
-function telegram2dialogSlices($mp, ?array $params, Closure $sliceCallback = null): \Generator
-{
-    foreach ($params as $key => $param) {
-        switch ($key) {
-            case 'limit':
-            case 'max_dialogs':
-            case 'pause_min':
-            case 'pause_max':
-                break;
-            default:
-                throw new Exception("Unknown Parameter: $key");
-        }
-    }
-    $limit      = $params['limit']       ?? 100;
-    $maxDialogs = $params['max_dialogs'] ?? 100000;
-    $pauseMin   = $params['pause_min']   ?? 0;
-    $pauseMax   = $params['pause_max']   ?? 0;
-    $pauseMax   = $pauseMax < $pauseMin ? $pauseMin : $pauseMax;
-    $json = toJSON([
-        'limit'       => $limit,
-        'max_dialogs' => $maxDialogs,
-        'pause_min'   => $pauseMin,
-        'pause_max'   => $pauseMax
-    ]);
-    yield $mp->logger($json, Logger::ERROR);
-
-    //yield $mp->echo('Entering telegram2dialogSlices!' . PHP_EOL);
-    //yield $mp->logger('Entering telegram2dialogSlices! ' . toJSON($params, false), Logger::ERROR);
-
-    $params = [
-        'offset_date' => 0,
-        'offset_id'   => 0,
-        'offset_peer' => ['_' => 'inputPeerEmpty'],
-        'limit'       => $limit,
-        'hash'        => 0,
-    ];
-    $res = ['count' => 1];
-    $fetched = 0;
-    $sentDialogs  = 0;
-    while ($fetched < $res['count']) {
-        //yield $mp->echo(PHP_EOL . 'Request: ' . toJSON($params, false) . PHP_EOL);
-        yield $mp->logger('Request: ' . toJSON($params, false), Logger::ERROR);
-
-        try {
-            //==============================================
-            //$res = yield from $this->methodCallAsyncRead('messages.getDialogs', $this->dialog_params, ['datacenter' => $datacenter, 'FloodWaitLimit' => 100]);
-            $res = yield $mp->messages->getDialogs($params);
-            //==============================================
-        } catch (RPCErrorException $e) {
-            if (\strpos($e->rpc, 'FLOOD_WAIT_') === 0) {
-                throw new Exception('FLOOD');
-            }
-        }
-
-        $sliceSize    = count($res['dialogs']);
-        $totalDialogs = isset($res['count']) ? $res['count'] : $sliceSize;
-
-        $messageCount = count($res['messages']);
-        $chatCount    = count($res['chats']);
-        $userCount    = count($res['users']);
-        $fetchedSofar = $fetched + $sliceSize;
-        $countMsg     = "Result: {dialogs:$sliceSize, messages:$messageCount, chats:$chatCount, users:$userCount " .
-            "total:$totalDialogs fetched:$fetchedSofar}";
-        //yield $mp->echo($countMsg. PHP_EOL . PHP_EOL);
-        yield $mp->logger($countMsg, Logger::ERROR);
-        if (count($res['messages']) !== $sliceSize) {
-            throw new Exception('Unequal slice size.');
-        }
-
-        if ($sliceCallback !== null) {
-            //===================================================================================================
-            yield $sliceCallback($totalDialogs, $res['dialogs'], $res['messages'], $res['chats'], $res['users']);
-            //===================================================================================================
-            $sentDialogs += count($res['dialogs']);
-            yield $mp->logger("Sent Dialogs:$sentDialogs,  Max Dialogs:$maxDialogs, Slice Size:$sliceSize", Logger::ERROR);
-            if ($sentDialogs >= $maxDialogs) {
-                break;
-            }
-        }
-
-        $lastPeer = 0;
-        $lastDate = 0;
-        $lastId   = 0;
-        $res['messages'] = \array_reverse($res['messages'] ?? []);
-        foreach (\array_reverse($res['dialogs'] ?? []) as $dialog) {
-            $fetched += 1;
-            $id = $mp->getId($dialog['peer']);
-            if (!$lastDate) {
-                if (!$lastPeer) {
-                    $lastPeer = $id;
-                }
-                if (!$lastId) {
-                    $lastId = $dialog['top_message'];
-                }
-                foreach ($res['messages'] as $message) {
-                    $idBot = yield $mp->getId($message);
-                    if (
-                        $message['_'] !== 'messageEmpty' &&
-                        $idBot  === $lastPeer            &&
-                        $lastId  == $message['id']
-                    ) {
-                        $lastDate = $message['date'];
-                        break;
-                    }
-                }
-            }
-        }
-        if ($lastDate) {
-            $params['offset_date'] = $lastDate;
-            $params['offset_peer'] = $lastPeer;
-            $params['offset_id']   = $lastId;
-        } else {
-            //yield $mp->echo('*** NO LAST-DATE EXISTED'.PHP_EOL);
-            yield $mp->logger('*** All ' . $totalDialogs . ' Dialogs fetched. EXITING ...', Logger::ERROR);
-            break;
-        }
-        if (!isset($res['count'])) {
-            //yield $mp->echo('*** All ' . $totalDialogs . ' Dialogs fetched. EXITING ...'.PHP_EOL);
-            yield $mp->logger('*** All ' . $totalDialogs . ' Dialogs fetched. EXITING ...', Logger::ERROR);
-            break;
-        }
-        if ($pauseMin > 0 || $pauseMax > 0) {
-            $pause = $pauseMax <= $pauseMin ? $pauseMin : rand($pauseMin, $pauseMax);
-            //yield $mp->echo("Pausing for $pause seconds. ...".PHP_EOL);
-            yield $mp->logger("Pausing for $pause seconds. ...", Logger::ERROR);
-            yield $mp->logger(" ", Logger::ERROR);
-            yield $mp->sleep($pause);
-        } else {
-            yield $mp->logger(" ", Logger::ERROR);
-        }
-    } // end of while/for
-    //echo('Exiting telegram2dialogSlices!'.PHP_EOL);
-    //yield $mp->logger('Exiting telegram2dialogSlices!', Logger::ERROR);
-}
-
-
-function visitDialogs($mp, array $params, callable $callback): \Generator
-{
-    //yield $mp->logger("Entered VisitDialogs:" . toJSON($params, false), Logger::ERROR);
-    yield telegram2dialogSlices(
-        $mp,
-        $params,
-        function (
-            int   $totalDialogs,
-            array $dialogs,
-            array $messages,
-            array $chats,
-            array $users
-        )
-        use ($callback, $mp) {
-            $index = 0;
-            foreach ($dialogs as $idx => $dialog) {
-                //yield $mp->logger("dialog $idx: " . toJSON($dialog, false), Logger::ERROR);
-                $peer     = $dialog['peer'];
-                $message  =  null;
-                foreach ($messages as $msg) {
-                    if ($dialog['top_message'] === $msg['id']) {
-                        $message = $msg;
-                        break;
-                    }
-                }
-                if ($message === null) {
-                    throw new Exception("Missing top-message $idx: " . toJSON($dialog));
-                }
-                switch ($peer['_']) {
-                    case 'peerUser':
-                        $peerId = $peer['user_id'];
-                        foreach ($users as $user) {
-                            if ($peerId === $user['id']) {
-                                $subtype = ($user['bot'] ?? false) ? 'bot' : 'user';
-                                $peerval = $user;
-                                if (isset($user['username'])) {
-                                    $name = '@' . $user['username'];
-                                } elseif (($user['first_name'] ?? '') !== '' || ($user['last_name'] ?? '') !== '') {
-                                    $name = trim(($user['first_name'] ?? '') . ' ' . ($user['last_name'] ?? ''));
-                                } elseif (isset($chat['id'])) {
-                                    $name = strval($user['id']);
-                                } else {
-                                    $name = '';
-                                }
-                                if (!isset($message['from_id'])) {
-                                    $mp->logger('ERROR user: '    . toJSON($user),    Logger::ERROR);
-                                    $mp->logger('ERROR message: ' . toJSON($message), Logger::ERROR);
-                                    throw new Exception('Mismatch');
-                                }
-                                break 2;
-                            }
-                        }
-                        throw new Exception("Missing user: '$peerId'");
-                    case 'peerChat':
-                    case 'peerChannel':
-                        $peerId = $peer['_'] === 'peerChat' ? $peer['chat_id'] : $peer['channel_id'];
-                        foreach ($chats as $chat) {
-                            if ($chat['id'] === $peerId) {
-                                $peerval = $chat;
-                                if (isset($chat['username'])) {
-                                    $name = $chat['username'];
-                                } elseif (($chat['title'] ?? '') !== '') {
-                                    $name = $chat['title'];
-                                } elseif (isset($chat['id'])) {
-                                    $name = strval($chat['id']);
-                                } else {
-                                    $name = '';
-                                }
-                                switch ($chat['_']) {
-                                    case 'chatEmpty':
-                                        $subtype = $chat['_'];
-                                        break;
-                                    case 'chat':
-                                        $subtype = 'basicgroup';
-                                        break;
-                                    case 'chatForbidden':
-                                        $subtype = $chat['_'];
-                                        break;
-                                    case 'channel':
-                                        $subtype = ($chat['megagroup'] ?? false) ? 'supergroup' : 'channel';
-                                        break;
-                                    case 'channelForbidden':
-                                        $subtype = $chat['_'];
-                                        break;
-                                    default:
-                                        throw new Exception("Unknown subtype: '$peerId'  '" . $chat['_'] . "'");
-                                }
-                                break 2;
-                            }
-                        }
-                        throw new Exception("Missing chat: '$peerId'");
-                    default:
-                        throw new Exception("Invalid peer type: '" . $peer['_'] . "'");
-                }
-                yield $callback($totalDialogs, $index, $peerId, $subtype, $name, $peerval, $message);
-                $index += 1;
-            }
-        }
-    );
-}
-
 class EventHandler extends MadelineEventHandler
 {
     private $startTime;
@@ -791,42 +538,42 @@ class EventHandler extends MadelineEventHandler
         $lastLaunchDuration = $launch['duration'] ?? 0;
         $lastPeakMemory     = $launch['memory']   ?? 0;
 
-        $totalDialogsOut = 0;
-        $peerCounts   = [
-            'user' => 0, 'bot' => 0, 'basicgroup' => 0, 'supergroup' => 0, 'channel' => 0,
-            'chatForbidden' => 0, 'channelForbidden' => 0
-        ];
+        // ================================================================================
+        $dialogs = [];
         $mp = $this;
-        $currentUserIds = [];
-        $lastMessages = [];
-        yield visitDialogs(
+        yield visitAllDialogs(
             $this,
-            ['max_dialogs' => 20],
-            function (int $totalDialogs, int $index, int $peerId, string $subtype, string $name, ?array $peerval, ?array $message)
-            use ($mp, &$totalDialogsOut, &$peerCounts, &$currentUserIds, &$lastMessages): void {
-                $totalDialogsOut = $totalDialogs;
-                $peerCounts[$subtype] += 1;
-                switch ($subtype) {
-                    case 'bot':
-                    case 'basicgroup':
-                    case 'supergroup':
-                    case 'channel':
-                    case 'chatForbidden':
-                    case 'channelForbidden':
-                        break;
-                    case 'user':
-                        if (!$peerval['self'] && $peerId !== 777000) {
-                            //$out = ['peer_id' => $peerId, 'name' => $name, 'peerval' => $peerval, 'message' => $message];
-                            //$mp->logger(toJSON($out), Logger::ERROR);
-                            $currentUserIds[] = $peerId;
-                            $lastMessages[]   = $message;
-                        }
-                        break;
+            [/*'max_dialogs' => 20*/],
+            function ($mp, int $totalDialogs, int $index, int $botapiId, string $subtype, string $name, array $dialog, array $peerval, ?array $message)
+            use (&$dialogs) {
+                if ($subtype === 'user') {
+                    unset($dialog['notify_settings']);
+                    unset($dialog['draft']);
+                    if ($user['deleted'] ?? false) {
+                        $dialog['deleted'] = true;
+                    }
+                    if ($message !== null) {
+                        $dialog['date'] = $message['date'];
+                    }
+                    $dialogs[] = ['name' => $name] + $dialog;
+                }
+                //yield $this->logger(toJSON($dialog, false));
+                if ($subtype === 'user' && !$peerval['self'] && $botapiId !== 777000 && $message && $message['from_id'] !== $this->robotId) {
+                    //$out = ['botapi_id' => $botapiId, 'name' => $name, 'subtype' => $subtype];
+                    //yield $mp->logger(toJSON($out),     Logger::ERROR);
+                    //yield $mp->logger(toJSON($peerval), Logger::ERROR);
+                    //yield $mp->logger(toJSON($message), Logger::ERROR);
+                    $messageLimit = 5;
+                    //$isNew = yield verifyOldOrNew($mp, $botapiId, $dialog, $message, $messageLimit);
                 }
             }
         );
-        yield $this->logger("Count of users: " . count($currentUserIds), Logger::ERROR);
-
+        foreach ($dialogs as $dialog) {
+            yield $this->logger(toJSON($dialog), Logger::ERROR);
+        }
+        //yield $this->logger("Count of users: " . count($currentUserIds), Logger::ERROR);
+        // ================================================================================
+        /*
         $messageLimit = 5;
         foreach ($lastMessages as $idx => $message) {
             $userId = $currentUserIds[$idx];
@@ -869,6 +616,7 @@ class EventHandler extends MadelineEventHandler
                 }
             }
         }
+        */
         yield $this->logger(" ", Logger::ERROR);
 
         $this->setReportPeers($this->reportPeers);
@@ -919,7 +667,7 @@ class EventHandler extends MadelineEventHandler
         }
         if (!isset($update['message']['message'])) {
             yield $this->echo("Empty message-text:<br>" . PHP_EOL);
-            yield $this->echo(toJSON($update) . '<br>' . PHP_EOL);
+            yield $this->echo(toJSON($update) . '<br>'  . PHP_EOL);
             exit;
         }
         $msgType      = $update['_'];
@@ -977,7 +725,7 @@ class EventHandler extends MadelineEventHandler
 
         if ($byVisitor) {
             yield $this->logger(toJSON($update), Logger::ERROR);
-            if (newVisitor($fromId)) {
+            if (newVisitor($this, $fromId, $update['message'], 5/*$messageLimit*/)) {
                 /*
                 yield $this->messages->sendMessage([
                     'peer'            => $fromId,
@@ -1016,7 +764,6 @@ class EventHandler extends MadelineEventHandler
             !$this->processCommands &&
             $byRobot && $toRobot &&
             $msgType === 'updateNewMessage' &&
-            //strStartsWith($msgOrig, SCRIPT_NAME . ' started at ') &&
             $msgAge <= $this->oldAge
         ) {
             $this->processCommands = true;
@@ -1086,7 +833,6 @@ class EventHandler extends MadelineEventHandler
                         $notifAge = $notif['age'];
                         $notifStr = $notifAge === 0 ? "ON / Never wipe" : "ON / Wipe after $notifAge secs.";
                     }
-                    //yield $this->echo("Robot's Id: '" . ($this->robotId? $this->Robot ) . '!' . PHP_EOL);
                     $status  = '<b>STATUS:</b>  (Script: ' . SCRIPT_NAME . ' ' . SCRIPT_VERSION . ')<br>';
                     $status .= "Host: " . hostname() . "<br>";
                     $status .= "Robot's User-Name: $this->account<br>";
@@ -1095,10 +841,10 @@ class EventHandler extends MadelineEventHandler
                     $status .= "Peak Memory: $peakMemUsage<br>";
                     $status .= "Current Memory: $currentMemUsage<br>";
                     $status .= "Allowed Memory: $memoryLimit<br>";
-                    $status .= 'CPU: '         . getCpuUsage()            . '<br>';
+                    $status .= 'CPU: '         . getCpuUsage() . '<br>';
                     $status .= "Session Size: $sessionSize<br>";
                     $status .= 'Time: ' . date_default_timezone_get() . ' ' . date("d H:i:s") . '<br>';
-                    $status .= 'Updates: '  . $this->updatesProcessed . '<br>';
+                    $status .= 'Updates Processed: ' . $this->updatesProcessed . '<br>';
                     $status .= 'Loop State: ' . ($this->getLoopState() ? 'ON' : 'OFF') . '<br>';
                     $status .= 'Notification: ' . $notifStr . PHP_EOL;
                     $status .= 'Launch Method: ' . getLaunchMethod() . '<br>';
@@ -1106,7 +852,6 @@ class EventHandler extends MadelineEventHandler
                     $status .= 'Previous Launch Method: '   . $lastLaunchMethod . '<br>';
                     $status .= 'Previous Launch Duration: ' . $lastLaunchDuration . '<br>';
                     $status .= 'Previous Peak Memory: '     . $lastPeakMemory . '<br>';
-                    //$this->echo(toJSON($peer, false));
                     yield $this->messages->editMessage([
                         'peer'       => $peer,
                         'id'         => $messageId,
@@ -1138,10 +883,10 @@ class EventHandler extends MadelineEventHandler
                     //$params['max_dialogs'] = 200;
                     //$params['pause_min']   =   2;
                     //$params['pause_max']   =   6;
-                    yield visitDialogs(
+                    yield visitAllDialogs/*visitDialogs*/(
                         $this,
                         $params,
-                        function (int $totalDialogs, int $index, int $peerId, string $subtype, string $name, ?array $peerval, array $message)
+                        function ($mp, int $totalDialogs, int $index, int $botapiId, string $subtype, string $name, ?array $userOrChat, array $message)
                         use (&$totalDialogsOut, &$peerCounts): void {
                             $totalDialogsOut = $totalDialogs;
                             $peerCounts[$subtype] += 1;
@@ -1301,12 +1046,6 @@ class EventHandler extends MadelineEventHandler
 
         //Function: Finnish executing the Stop command.
         if ($byRobot && $msgOrig === 'Robot is stopping ...') {
-            $result = yield $this->messages->editMessage([
-                'peer'    => $peer,
-                'id'      => $messageId,
-                'message' => 'Robot is stopped!',
-            ]);
-            $this->logger(toJSON($result), Logger::ERROR);
             if (Shutdown::removeCallback('restarter')) {
                 yield $this->logger('Self-Restarter disabled.', Logger::ERROR);
             }
@@ -1315,7 +1054,6 @@ class EventHandler extends MadelineEventHandler
     } // end of function
 } // end of the class
 
-//set_error_handler('errHandle');
 
 if (PHP_SAPI !== 'cli') {
     error_log("Robot's URL: '" . getURL() . "' SERVER_NAME: '" . getWebServerName() . "'");
@@ -1344,6 +1082,8 @@ if (!file_exists('data/startups.txt')) {
     fclose($handle);
 }
 
+//$settings['app_info']['api_id']   = 6;                                  // <== Use your own, or let MadelineProto ask you.
+//$settings['app_info']['api_hash'] = "eb06d4abfb49dc3eeb1aeb98ae0f581e"; // <== Use your own, or let MadelineProto ask you.
 $settings['logger']['logger_level'] = Logger::ERROR;
 $settings['logger']['logger'] = Logger::FILE_LOGGER;
 $settings['peer']['full_info_cache_time'] = 60;
@@ -1351,36 +1091,36 @@ $settings['serialization']['cleanup_before_serialization'] = true;
 $settings['serialization']['serialization_interval'] = 60;
 $settings['app_info']['app_version']    = SCRIPT_NAME . ' ' . SCRIPT_VERSION;
 $settings['app_info']['system_version'] =  hostname() . ' ' . PHP_SAPI === 'cli' ? 'CLI' : "WEB";
-$madelineProto = new API(SESSION_FILE, $settings);
-if (!$madelineProto) {
+$MadelineProto = new API(SESSION_FILE, $settings);
+if (!$MadelineProto) {
     Logger::log("Strange! MadelineProto object is null. exiting ....", Logger::ERROR);
     exit("Unsuccessful MadelineProto Object creation.");
 }
-$madelineProto->logger("API object created!", Logger::ERROR);
-$madelineProto->async(true);
+$MadelineProto->logger("API object created!", Logger::ERROR);
+$MadelineProto->async(true);
 
 $genLoop = new GenericLoop(
-    $madelineProto,
-    function () use ($madelineProto) {
-        $eventHandler = $madelineProto->getEventHandler();
+    $MadelineProto,
+    function () use ($MadelineProto) {
+        $eventHandler = $MadelineProto->getEventHandler();
         $now = time();
         if ($eventHandler->getLoopState() && $now % 60 === 0) {
             $msg = 'Time is ' . date('H:i:s', $now) . '!';
-            yield $madelineProto->logger($msg, Logger::ERROR);
+            yield $MadelineProto->logger($msg, Logger::ERROR);
             if (false) {
-                yield $madelineProto->account->updateProfile([
+                yield $MadelineProto->account->updateProfile([
                     'about' => date('H:i:s', $now)
                 ]);
             }
             if (false) {
                 $robotId = $eventHandler->getRobotID();
-                yield $madelineProto->messages->sendMessage([
+                yield $MadelineProto->messages->sendMessage([
                     'peer'    => $robotId,
                     'message' => $msg
                 ]);
             }
         }
-        yield $this->sleep(1);
+        yield $MadelineProto->sleep(1);
         $delay = secondsToNexMinute();
         return $delay; // Repeat at the begining of the next minute, sharp.
     },
@@ -1391,17 +1131,17 @@ $robotName    = SCRIPT_NAME;
 $startTime    = \time();
 $launchesFile = \realpath('data/launches.txt');
 $tempId = Shutdown::addCallback(
-    static function () use ($madelineProto, $robotName, $startTime, $launchesFile) {
+    static function () use ($MadelineProto, $robotName, $startTime, $launchesFile) {
         $now          = time();
         $duration     = $now - $startTime;
         $launchMethod = getLaunchMethod();
         $memory       = getMemUsage(true);
         echo ('Shutting down ....<br>' . PHP_EOL);
         $msg = $robotName . " stopped at " . date("d H:i:s", $now) . "!  Execution duration:" . gmdate('H:i:s', $duration);
-        if ($madelineProto) {
+        if ($MadelineProto) {
             try {
-                $madelineProto->logger($msg, Logger::ERROR);
-                $madelineProto->logger("Launch Method:'$launchMethod'  Duration: $duration", Logger::ERROR);
+                $MadelineProto->logger($msg, Logger::ERROR);
+                $MadelineProto->logger("Launch Method:'$launchMethod'  Duration: $duration", Logger::ERROR);
                 $launchesHandle = fopen($launchesFile, 'a');
                 fwrite($launchesHandle, "\n$now $launchMethod $duration $memory");
             } catch (\Exception $e) {
@@ -1421,13 +1161,13 @@ $tempId = Shutdown::addCallback(
 );
 
 $maxRecycles = 5;
-safeStartAndLoop($madelineProto, $genLoop, $maxRecycles);
+safeStartAndLoop($MadelineProto, $genLoop, $maxRecycles);
 
 exit(PHP_EOL . 'Finished' . PHP_EOL);
 
 
 
-function getDialogsExtended($mp, ?array $params, Closure $sliceCallback = null): \Generator
+function visitAllDialogs($mp, ?array $params, Closure $sliceCallback = null): \Generator
 {
     foreach ($params as $key => $param) {
         switch ($key) {
@@ -1451,10 +1191,8 @@ function getDialogsExtended($mp, ?array $params, Closure $sliceCallback = null):
         'pause_min'   => $pauseMin,
         'pause_max'   => $pauseMax
     ]);
+    $limit = min($limit, $maxDialogs);
     yield $mp->logger($json, Logger::ERROR);
-
-    //yield $mp->echo('Entering telegram2dialogSlices!' . PHP_EOL);
-    //yield $mp->logger('Entering telegram2dialogSlices! ' . toJSON($params, false), Logger::ERROR);
 
     $params = [
         'offset_date' => 0,
@@ -1464,20 +1202,21 @@ function getDialogsExtended($mp, ?array $params, Closure $sliceCallback = null):
         'hash'        => 0,
     ];
     $res = ['count' => 1];
-    $fetched = 0;
-    $sentDialogs  = 0;
+    $fetched     = 0;
+    $dialogIndex = 0;
+    $sentDialogs = 0;
+    $dialogIds   = [];
     while ($fetched < $res['count']) {
         //yield $mp->echo(PHP_EOL . 'Request: ' . toJSON($params, false) . PHP_EOL);
         yield $mp->logger('Request: ' . toJSON($params, false), Logger::ERROR);
 
         try {
             //==============================================
-            //$res = yield from $this->methodCallAsyncRead('messages.getDialogs', $this->dialog_params, ['datacenter' => $datacenter, 'FloodWaitLimit' => 100]);
-            $res = yield $mp->messages->getDialogs($params);
+            $res = yield $mp->messages->getDialogs($params, ['FloodWaitLimit' => 200]);
             //==============================================
         } catch (RPCErrorException $e) {
             if (\strpos($e->rpc, 'FLOOD_WAIT_') === 0) {
-                throw new Exception('FLOOD');
+                throw new Exception('FLOOD' . $e->rpc);
             }
         }
 
@@ -1498,9 +1237,29 @@ function getDialogsExtended($mp, ?array $params, Closure $sliceCallback = null):
 
         if ($sliceCallback !== null) {
             //===================================================================================================
-            yield $sliceCallback($totalDialogs, $res['dialogs'], $res['messages'], $res['chats'], $res['users']);
+            //yield $sliceCallback($totalDialogs, $res['dialogs'], $res['messages'], $res['chats'], $res['users']);
+            foreach ($res['dialogs'] ?? [] as $dialog) {
+                $dialogInfo = yield resolveDialog($mp, $dialog, $res['messages'], $res['chats'], $res['users']);
+                $botapiId = $dialogInfo['botapi_id'];
+                if (!isset($dialogIds[$botapiId])) {
+                    $dialogIds[] = $botapiId;
+                    yield $sliceCallback(
+                        $mp,
+                        $totalDialogs,
+                        $dialogIndex,
+                        $dialogInfo['botapi_id'],
+                        $dialogInfo['subtype'],
+                        $dialogInfo['name'],
+                        $dialogInfo['dialog'],
+                        $dialogInfo['user_or_chat'],
+                        $dialogInfo['message']
+                    );
+                    $dialogIndex += 1;
+                    $sentDialogs += 1;
+                }
+            }
             //===================================================================================================
-            $sentDialogs += count($res['dialogs']);
+            //$sentDialogs += count($res['dialogs']);
             yield $mp->logger("Sent Dialogs:$sentDialogs,  Max Dialogs:$maxDialogs, Slice Size:$sliceSize", Logger::ERROR);
             if ($sentDialogs >= $maxDialogs) {
                 break;
@@ -1513,22 +1272,25 @@ function getDialogsExtended($mp, ?array $params, Closure $sliceCallback = null):
         $res['messages'] = \array_reverse($res['messages'] ?? []);
         foreach (\array_reverse($res['dialogs'] ?? []) as $dialog) {
             $fetched += 1;
-            $id = $mp->getId($dialog['peer']);
+            $id = yield $mp->getId($dialog['peer']);
             if (!$lastDate) {
                 if (!$lastPeer) {
                     $lastPeer = $id;
+                    yield $mp->logger("lastPeer is set to $id.", Logger::ERROR);
                 }
                 if (!$lastId) {
                     $lastId = $dialog['top_message'];
+                    yield $mp->logger("lastId is set to $lastId.", Logger::ERROR);
                 }
                 foreach ($res['messages'] as $message) {
                     $idBot = yield $mp->getId($message);
                     if (
                         $message['_'] !== 'messageEmpty' &&
                         $idBot  === $lastPeer            &&
-                        $lastId  == $message['id']
+                        $lastId === $message['id']
                     ) {
                         $lastDate = $message['date'];
+                        yield $mp->logger("lastDate is set to $lastDate from {$message['id']}.", Logger::ERROR);
                         break;
                     }
                 }
@@ -1538,19 +1300,20 @@ function getDialogsExtended($mp, ?array $params, Closure $sliceCallback = null):
             $params['offset_date'] = $lastDate;
             $params['offset_peer'] = $lastPeer;
             $params['offset_id']   = $lastId;
+            $params['count']       = $sliceSize;
         } else {
-            //yield $mp->echo('*** NO LAST-DATE EXISTED'.PHP_EOL);
+            yield $mp->echo('*** NO LAST-DATE EXISTED' . PHP_EOL);
             yield $mp->logger('*** All ' . $totalDialogs . ' Dialogs fetched. EXITING ...', Logger::ERROR);
             break;
         }
         if (!isset($res['count'])) {
-            //yield $mp->echo('*** All ' . $totalDialogs . ' Dialogs fetched. EXITING ...'.PHP_EOL);
+            yield $mp->echo('*** All ' . $totalDialogs . ' Dialogs fetched. EXITING ...' . PHP_EOL);
             yield $mp->logger('*** All ' . $totalDialogs . ' Dialogs fetched. EXITING ...', Logger::ERROR);
             break;
         }
         if ($pauseMin > 0 || $pauseMax > 0) {
             $pause = $pauseMax <= $pauseMin ? $pauseMin : rand($pauseMin, $pauseMax);
-            //yield $mp->echo("Pausing for $pause seconds. ...".PHP_EOL);
+            yield $mp->echo("Pausing for $pause seconds. ..." . PHP_EOL);
             yield $mp->logger("Pausing for $pause seconds. ...", Logger::ERROR);
             yield $mp->logger(" ", Logger::ERROR);
             yield $mp->sleep($pause);
@@ -1558,6 +1321,136 @@ function getDialogsExtended($mp, ?array $params, Closure $sliceCallback = null):
             yield $mp->logger(" ", Logger::ERROR);
         }
     } // end of while/for
-    //echo('Exiting telegram2dialogSlices!'.PHP_EOL);
-    //yield $mp->logger('Exiting telegram2dialogSlices!', Logger::ERROR);
+}
+
+
+
+function resolveDialog($mp, array $dialog, array $messages, array $chats, array $users)
+{
+    $peer     = $dialog['peer'];
+    $message  =  null;
+    foreach ($messages as $msg) {
+        if ($dialog['top_message'] === $msg['id']) {
+            $message = $msg;
+            break;
+        }
+    }
+    if ($message === null) {
+        throw new Exception("Missing top-message: " . toJSON($dialog));
+    }
+    switch ($peer['_']) {
+        case 'peerUser':
+            $peerId = $peer['user_id'];
+            foreach ($users as $user) {
+                if ($peerId === $user['id']) {
+                    $subtype = ($user['bot'] ?? false) ? 'bot' : 'user';
+                    $peerval = $user;
+                    if (isset($user['username'])) {
+                        $name = '@' . $user['username'];
+                    } elseif (($user['first_name'] ?? '') !== '' || ($user['last_name'] ?? '') !== '') {
+                        $name = trim(($user['first_name'] ?? '') . ' ' . ($user['last_name'] ?? ''));
+                    } elseif (isset($user['id'])) {
+                        $name = strval($user['id']);
+                    } else {
+                        $name = '';
+                    }
+                    if (!isset($message['from_id'])) {
+                        $mp->logger('ERROR user: '    . toJSON($user),    Logger::ERROR);
+                        $mp->logger('ERROR message: ' . toJSON($message), Logger::ERROR);
+                        throw new Exception('Mismatch');
+                    }
+                    break 2;
+                }
+            }
+            throw new Exception("Missing user: '$peerId'");
+        case 'peerChat':
+        case 'peerChannel':
+            $peerId = $peer['_'] === 'peerChat' ? $peer['chat_id'] : $peer['channel_id'];
+            foreach ($chats as $chat) {
+                if ($chat['id'] === $peerId) {
+                    $peerval = $chat;
+                    if (isset($chat['username'])) {
+                        $name = $chat['username'];
+                    } elseif (($chat['title'] ?? '') !== '') {
+                        $name = $chat['title'];
+                    } elseif (isset($chat['id'])) {
+                        $name = strval($chat['id']);
+                    } else {
+                        $name = '';
+                    }
+                    switch ($chat['_']) {
+                        case 'chatEmpty':
+                            $subtype = $chat['_'];
+                            break;
+                        case 'chat':
+                            $subtype = 'basicgroup';
+                            break;
+                        case 'chatForbidden':
+                            $subtype = $chat['_'];
+                            break;
+                        case 'channel':
+                            $subtype = ($chat['megagroup'] ?? false) ? 'supergroup' : 'channel';
+                            break;
+                        case 'channelForbidden':
+                            $subtype = $chat['_'];
+                            break;
+                        default:
+                            throw new Exception("Unknown subtype: '$peerId'  '" . $chat['_'] . "'");
+                    }
+                    break 2;
+                }
+            }
+            throw new Exception("Missing chat: '$peerId'");
+        default:
+            throw new Exception("Invalid peer type: '" . $peer['_'] . "'");
+    }
+    return ['botapi_id' => $peerId, 'subtype' => $subtype, 'name' => $name, 'dialog' => $dialog, 'user_or_chat' => $peerval, 'message' => $message];
+}
+
+function newVisitor($mp, int $fromId, array $message,  int $messageLimit): Generator
+{
+    return true;
+    yield;
+}
+function verifyOldOrNew($mp, int $userId, array $dialog, array $message, int $messageLimit): Generator
+{
+    if ($message === null) {
+        yield $mp->logger("Last Message: NONE", Logger::ERROR);
+        return false;
+    }
+    $user = yield $mp->users->getUsers(['id' => [$userId]]);
+    yield $mp->logger("The User: " . toJSON($user), Logger::ERROR);
+    yield $mp->logger("Last Message: " . toJSON($message), Logger::ERROR);
+    if (($message['from_id']) !== $mp->getRobotId()) {
+        $res = yield $mp->messages->getHistory([
+            'peer'        => $message,
+            'limit'       => $messageLimit,
+            'offset_id'   => 0,
+            'offset_date' => 0,
+            'add_offset'  => 0,
+            'max_id'      => 0,
+            'min_id'      => 0,
+        ]);
+        $messages = $res['messages'];
+        $chats    = $res['chats'];
+        $users    = $res['users'];
+
+        $isNew = true;
+        foreach ($res['messages'] as $idx => $msg) {
+            if ($msg['from_id'] === $mp->getRobotId()) {
+                $isNew = false;
+                break;
+            }
+        }
+        yield $mp->logger("idx: '$idx'   " . ($isNew ? 'NEW' : "OLD"), Logger::ERROR);
+        $mostRecent = \max($mp->startTime - 60 * 60 * 24 * 7, $lastStopTime);
+        if ($message['date'] > $mostRecent) {
+            if ($isNew) {
+                yield $mp->logger("New User: " . toJSON($message), Logger::ERROR);
+            } else {
+                yield $mp->logger("Old User: " . toJSON($message), Logger::ERROR);
+            }
+        }
+    }
+    return $isNew;
 }
