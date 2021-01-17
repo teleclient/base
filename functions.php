@@ -24,20 +24,43 @@ function toJSON($var, bool $pretty = true): string
     return $json;
 }
 
-//function errHandle($errNo, $errStr, $errFile, $errLine)
-//{
-//    $msg = "$errStr in $errFile on line $errLine";
-//    if ($errNo == E_NOTICE || $errNo == E_WARNING) {
-//        throw new ErrorException($msg, $errNo);
-//    } else {
-//        echo $msg;
-//    }
-//}
+function errHandle($errNo, $errStr, $errFile, $errLine)
+{
+    $msg = "$errStr in $errFile on line $errLine";
+    if ($errNo === E_NOTICE || $errNo === E_WARNING) {
+        throw new ErrorException($msg, $errNo);
+    } else {
+        echo $msg;
+    }
+}
+function exception_error_handler($severity, $message, $file, $line)
+{
+    //if (!(error_reporting() & $severity)) {
+    // This error code is not included in error_reporting
+    //return;
+    //}
+    throw new ErrorException($message, 0, $severity, $file, $line);
+}
 
-function nowMilli()
+function nowMilli(): int
 {
     $mt = explode(' ', microtime());
     return ((int)$mt[1]) * 1000 + ((int)round($mt[0] * 1000));
+}
+
+function formatDuration(int $elapsedNano): string
+{
+    $seconds = intdiv((int)$elapsedNano, 1000000000);
+    $fractions = ((int)$elapsedNano) % 1000000000;
+    $fracs  = intdiv($fractions, 1000000);
+
+    $days  = floor($seconds / (3600 * 24));
+    $hours = floor($seconds / 3600 % 3600);
+    $mins  = floor($seconds / 60 % 60);
+    $secs  = floor($seconds % 60);
+    $date = sprintf('%01d %02d:%02d:%02d.%03d', $days, $hours, $mins, $secs, $fracs);
+
+    return $date;
 }
 
 function getUptime(int $start, int $end = 0): string
@@ -52,10 +75,46 @@ function getUptime(int $start, int $end = 0): string
     return $ageStr;
 }
 
-function getMemUsage(bool $peak = false): int
+function getWinMemory(): int
 {
-    $memUsage = $peak ? memory_get_peak_usage(true) : memory_get_usage(true);
-    return $memUsage;
+    $cmd = 'tasklist /fi "pid eq ' . strval(getmypid()) . '"';
+    $tasklist = trim(exec($cmd, $output));
+    $mem_val = mb_strrchr($tasklist, ' ', TRUE);
+    $mem_val = trim(mb_strrchr($mem_val, ' ', FALSE));
+    $mem_val = str_replace('.', '', $mem_val);
+    $mem_val = str_replace(',', '', $mem_val);
+    $mem_val = intval($mem_val);
+    return $mem_val;
+}
+
+function getPeakMemory(): int
+{
+    switch (PHP_OS_FAMILY) {
+        case 'Linux':
+            $mem = memory_get_peak_usage(true);
+            break;
+        case 'Windows':
+            $mem = getWinMemory();
+            break;
+        default:
+            throw new Exception('Unknown OS: ' . PHP_OS_FAMILY);
+    }
+    return $mem;
+}
+
+function getCurrentMemory(): int
+{
+    switch (PHP_OS_FAMILY) {
+        case 'Linux':
+            $mem = memory_get_usage(true);
+            break;
+        case 'Windows':
+            $mem = memory_get_usage(true);
+            break;
+        default:
+            throw new Exception('Unknown OS: ' . PHP_OS_FAMILY);
+    }
+    return $mem;
 }
 
 function getFileSize($file)
@@ -110,14 +169,14 @@ function getCpuUsage(): string
 
 function hostName(bool $full = false): string
 {
-    $name = getHostname();
+    $name = \getHostname();
     if (!$full && $name && strpos($name, '.') !== false) {
         $name = substr($name, 0, strpos($name, '.'));
     }
     return $name;
 }
 
-function strStartsWith($haystack, $needle, $caseSensitive = true)
+function strStartsWith(string $haystack, string $needle, bool $caseSensitive = true): bool
 {
     $length = strlen($needle);
     $startOfHaystack = substr($haystack, 0, $length);
@@ -217,11 +276,11 @@ function getAuthorized(int $authorized): string
     }
 }
 
-function parseCommand(string $msg, string $prefixes = '!/', int $maxParams = 3): array
+function parseCommand(?string $msg, string $prefixes = '!/', int $maxParams = 3): array
 {
     $command = ['prefix' => '', 'verb' => null, 'params' => []];
-    $msg = trim($msg);
-    if ($msg && strlen($msg) >= 2 && strpos($prefixes, $msg[0]) !== false) {
+    $msg = $msg ? trim($msg) : '';
+    if (strlen($msg) >= 2 && strpos($prefixes, $msg[0]) !== false) {
         $verb = strtolower(substr($msg, 1, strpos($msg . ' ', ' ') - 1));
         if (ctype_alnum($verb)) {
             $command['prefix'] = $msg[0];
@@ -235,47 +294,27 @@ function parseCommand(string $msg, string $prefixes = '!/', int $maxParams = 3):
     return $command;
 }
 
-function sendAndDelete(EventHandler $mp, int $dest, string $text, int $delaysecs = 30, bool $delmsg = true): Generator
+function sendAndDelete(object $eh, int $dest, string $text, int $delaysecs = 30, bool $delmsg = true): Generator
 {
-    $result = yield $mp->messages->sendMessage([
+    $result = yield $eh->messages->sendMessage([
         'peer'    => $dest,
         'message' => $text
     ]);
     if ($delmsg) {
         $msgid = $result['updates'][1]['message']['id'];
-        $mp->callFork((function () use ($mp, $msgid, $delaysecs) {
+        $eh->callFork((function () use ($eh, $msgid, $delaysecs) {
             try {
-                yield $mp->sleep($delaysecs);
-                yield $mp->messages->deleteMessages([
+                yield $eh->sleep($delaysecs);
+                yield $eh->messages->deleteMessages([
                     'revoke' => true,
                     'id'     => [$msgid]
                 ]);
-                yield $mp->logger('Robot\'s startup message is deleted at ' . time() . '!', Logger::ERROR);
+                yield $eh->logger('Robot\'s startup message is deleted at ' . time() . '!', Logger::ERROR);
             } catch (\Exception $e) {
-                yield $mp->logger($e, Logger::ERROR);
+                yield $eh->logger($e, Logger::ERROR);
             }
         })());
     }
-}
-
-function getLastLaunch(EventHandler $eh): Generator
-{
-    $content = yield get('data/launches.txt');
-    if ($content === '') {
-        return null;
-    }
-    $content  = substr($content, 1);
-    $launches = explode("\n", $content);
-    yield $eh->logger("Launches Count:" . count($launches), Logger::ERROR);
-    $values = explode(' ', trim(end($launches)));
-    if (count($values) !== 4) {
-        throw new Exception("Invalid launch information .");
-    }
-    $launch['stop']     = intval($values[0]);
-    $launch['method']   = $values[1];
-    $launch['duration'] = intval($values[2]);
-    $launch['memory']   = intval($values[3]);
-    return $launch;
 }
 
 function getWebServerName(): ?string
@@ -287,6 +326,84 @@ function setWebServerName(string $serverName): void
     $_SERVER['SERVER_NAME'] = $serverName;
 }
 
+function getPreviousLaunch(object $eh, string $fileName, int $scriptStartTime): \Generator
+{
+    $content = yield get($fileName);
+    if ($content === '') {
+        return null;
+    }
+    $content = substr($content, 1);
+    $lines = explode("\n", $content);
+    yield $eh->logger("Launches Count:" . count($lines), Logger::ERROR);
+    $record = null;
+    $key = strval($scriptStartTime) . ' ';
+    foreach ($lines as $line) {
+        if (strStartsWith($line, $key)) {
+            break;
+        }
+        $record = $line;
+    }
+    if ($record === null) {
+        return null;
+    }
+    $fields = explode(' ', trim($record));
+    if (count($fields) !== 6) {
+        throw new \ErrorException("Invalid launch information .");
+    }
+    $launch['time_start']    = intval($fields[0]);
+    $launch['time_end']      = intval($fields[1]);
+    $launch['launch_method'] = $fields[2];
+    $launch['stop_reason']   = $fields[3];
+    $launch['memory_start']  = intval($fields[4]);
+    $launch['memory_end']    = intval($fields[5]);
+    return $launch;
+}
+
+function appendLaunchRecord(string $fileName, int $scriptStartTime): array
+{
+    $record['time_start']    = $scriptStartTime;
+    $record['time_end']      = 0;
+    $record['launch_method'] = \getLaunchMethod();
+    $record['stop_reason']   = 'UNKNOWN';
+    $record['memory_start']  = \getPeakMemory();
+    $record['memory_end']    = 0;
+
+    $line = "{$record['time_start']} {$record['time_end']} {$record['launch_method']} {$record['stop_reason']} {$record['memory_start']} {$record['memory_end']}";
+    file_put_contents($fileName, "\n" . $line, FILE_APPEND | LOCK_EX);
+
+    return $record;
+}
+
+function updateLaunchRecord(string $fileName, int $scriptStartTime, int $scriptEndTime, string $stopReason): array
+{
+    $record = null;
+    $new    = null;
+    $lines  = file($fileName);
+    $key    = $scriptStartTime . ' ';
+    $content = '';
+    foreach ($lines as $line) {
+        if (strStartsWith($line, $key)) {
+            $items = explode(' ', $line);
+            $record['time_start']    = $items[0]; // $scriptStartTime
+            $record['time_end']      = $scriptEndTime;
+            $record['launch_method'] = $items[2]; // \getLaunchMethod();
+            $record['stop_reason']   = $stopReason;
+            $record['memory_start']  = $items[4];
+            $record['memory_end']    = \getPeakMemory();
+            $new = "{$record['time_start']} {$record['time_end']} {$record['launch_method']} {$record['stop_reason']} {$record['memory_start']} {$record['memory_end']}";
+            $content .= $new . "\n";
+        } else {
+            $content .= $line;
+        }
+    }
+    if ($new === null) {
+        throw new \ErrorException('Launch record not found!');
+    }
+    file_put_contents($fileName, rtrim($content));
+    return $record;
+}
+
+/*
 function getLaunchMethod2(): string
 {
     if (PHP_OS_FAMILY === "Windows") {
@@ -295,6 +412,7 @@ function getLaunchMethod2(): string
         return PHP_SAPI === 'cli' ? (isset($_SERVER['TERM']) ? 'manual' : 'cron') : 'web';
     }
 }
+*/
 /*
   Interface, LaunchMethod
 1) Web, Manual
@@ -338,7 +456,7 @@ function getLaunchMethod(): string
 function getHostTimeout($mp): int
 {
     $duration = $mp->__get('duration');
-    $reason   = $mp->__get('shutdow_reason');
+    $reason   = $mp->__get('shutdown_reason');
     if ($duration /*&& $reason && $reason !== 'stop' && $reason !== 'restart'*/) {
         return $duration;
     }
@@ -356,14 +474,15 @@ function getURL(): ?string
     return $url;
 }
 
-function safeStartAndLoop(API $MadelineProto, GenericLoop $genLoop = null, int $maxRecycles = 10): void
+/*
+function safeStartAndLoop(object $MadelineProto, string $eventHandler, GenericLoop $genLoop = null, int $maxRecycles = 10): void
 {
     $recycleTimes = [];
     while (true) {
         try {
-            $MadelineProto->loop(function () use ($MadelineProto, $genLoop) {
+            $MadelineProto->loop(function () use ($MadelineProto, $eventHandler, $genLoop) {
                 yield $MadelineProto->start();
-                yield $MadelineProto->setEventHandler('\EventHandler');
+                yield $MadelineProto->setEventHandler($eventHandler);
                 if ($genLoop !== null) {
                     $genLoop->start(); // Do NOT use yield.
                 }
@@ -399,8 +518,52 @@ function safeStartAndLoop(API $MadelineProto, GenericLoop $genLoop = null, int $
         }
     };
 }
+*/
+function safeStartAndLoop(API $MadelineProto, string $eventHandler, GenericLoop $genLoop = null, int $maxRecycles = 10): void
+{
+    $recycleTimes = [];
+    while (true) {
+        try {
+            $MadelineProto->loop(function () use ($MadelineProto, $eventHandler, $genLoop) {
+                yield $MadelineProto->start();
+                yield $MadelineProto->setEventHandler($eventHandler);  //\teleclient\base\EventHandler::class
+                if ($genLoop !== null) {
+                    $genLoop->start(); // Do NOT use yield.
+                }
 
-function checkTooManyRestarts(EventHandler $eh): Generator
+                // Synchronously wait for the update loop to exit normally.
+                // The update loop exits either on ->stop or ->restart (which also calls ->stop).
+                Tools::wait(yield from $MadelineProto->API->loop());
+                yield $MadelineProto->logger("Update loop exited!");
+            });
+            sleep(5);
+            break;
+        } catch (\Throwable $e) {
+            try {
+                $MadelineProto->logger->logger((string) $e, Logger::FATAL_ERROR);
+                // quit recycling if more than $maxRecycles happened within the last minutes.
+                $now = time();
+                foreach ($recycleTimes as $index => $restartTime) {
+                    if ($restartTime > $now - 1 * 60) {
+                        break;
+                    }
+                    unset($recycleTimes[$index]);
+                }
+                if (count($recycleTimes) > $maxRecycles) {
+                    // quit for good
+                    Shutdown::removeCallback('restarter');
+                    Magic::shutdown(1);
+                    break;
+                }
+                $recycleTimes[] = $now;
+                $MadelineProto->report("Surfaced: " . $e->getMessage());
+            } catch (\Throwable $e) {
+            }
+        }
+    };
+}
+/*
+function checkTooManyRestarts(object $eh): Generator
 {
     $startups = [];
     if (yield exists('data/startups.txt')) {
@@ -426,9 +589,36 @@ function checkTooManyRestarts(EventHandler $eh): Generator
     yield $eh->logger("startups: {now:$nowMilli, count0:$startupsCount0, count1:$restartsCount}", Logger::ERROR);
     return $restartsCount;
 }
+*/
+function checkTooManyRestarts(object $eh, string $startupFilename): \Generator
+{
+    //$startupFilename = 'data/startups.txt';
+    $startups = [];
+    if (yield exists($startupFilename)) {
+        $startupsText = yield get($startupFilename);
+        $startups = explode('\n', $startupsText);
+    } else {
+        // Create the file
+    }
+    $startupsCount0 = count($startups);
 
+    $nowMilli = nowMilli();
+    $aMinuteAgo = $nowMilli - 60 * 1000;
+    foreach ($startups as $index => $startupstr) {
+        $startup = intval($startupstr);
+        if ($startup < $aMinuteAgo) {
+            unset($startups[$index]);
+        }
+    }
+    $startups[] = strval($nowMilli);
+    $startupsText = implode('\n', $startups);
+    yield put($startupFilename, $startupsText);
+    $restartsCount = count($startups);
+    yield $eh->logger("startups: {now:$nowMilli, count0:$startupsCount0, count1:$restartsCount}", Logger::ERROR);
+    return $restartsCount;
+}
 
-function visitAllDialogs($mp, ?array $params, Closure $sliceCallback = null): \Generator
+function visitAllDialogs(object $mp, ?array $params, Closure $sliceCallback = null): \Generator
 {
     foreach ($params as $key => $param) {
         switch ($key) {
@@ -452,9 +642,8 @@ function visitAllDialogs($mp, ?array $params, Closure $sliceCallback = null): \G
         'pause_min'   => $pauseMin,
         'pause_max'   => $pauseMax
     ]);
-    $limit = min($limit, $maxDialogs);
     yield $mp->logger($json, Logger::ERROR);
-
+    $limit = min($limit, $maxDialogs);
     $params = [
         'offset_date' => 0,
         'offset_id'   => 0,
@@ -468,9 +657,7 @@ function visitAllDialogs($mp, ?array $params, Closure $sliceCallback = null): \G
     $sentDialogs = 0;
     $dialogIds   = [];
     while ($fetched < $res['count']) {
-        //yield $mp->echo(PHP_EOL . 'Request: ' . toJSON($params, false) . PHP_EOL);
-        yield $mp->logger('Request: ' . toJSON($params, false), Logger::ERROR);
-
+        //yield $mp->logger('Request: ' . toJSON($params, false), Logger::ERROR);
         try {
             //==============================================
             $res = yield $mp->messages->getDialogs($params, ['FloodWaitLimit' => 200]);
@@ -490,7 +677,6 @@ function visitAllDialogs($mp, ?array $params, Closure $sliceCallback = null): \G
         $fetchedSofar = $fetched + $sliceSize;
         $countMsg     = "Result: {dialogs:$sliceSize, messages:$messageCount, chats:$chatCount, users:$userCount " .
             "total:$totalDialogs fetched:$fetchedSofar}";
-        //yield $mp->echo($countMsg. PHP_EOL . PHP_EOL);
         yield $mp->logger($countMsg, Logger::ERROR);
         if (count($res['messages']) !== $sliceSize) {
             throw new Exception('Unequal slice size.');
@@ -498,7 +684,6 @@ function visitAllDialogs($mp, ?array $params, Closure $sliceCallback = null): \G
 
         if ($sliceCallback !== null) {
             //===================================================================================================
-            //yield $sliceCallback($totalDialogs, $res['dialogs'], $res['messages'], $res['chats'], $res['users']);
             foreach ($res['dialogs'] ?? [] as $dialog) {
                 $dialogInfo = yield resolveDialog($mp, $dialog, $res['messages'], $res['chats'], $res['users']);
                 $botapiId = $dialogInfo['botapi_id'];
@@ -520,8 +705,7 @@ function visitAllDialogs($mp, ?array $params, Closure $sliceCallback = null): \G
                 }
             }
             //===================================================================================================
-            //$sentDialogs += count($res['dialogs']);
-            yield $mp->logger("Sent Dialogs:$sentDialogs,  Max Dialogs:$maxDialogs, Slice Size:$sliceSize", Logger::ERROR);
+            //yield $mp->logger("Sent Dialogs:$sentDialogs,  Max Dialogs:$maxDialogs, Slice Size:$sliceSize", Logger::ERROR);
             if ($sentDialogs >= $maxDialogs) {
                 break;
             }
@@ -537,11 +721,11 @@ function visitAllDialogs($mp, ?array $params, Closure $sliceCallback = null): \G
             if (!$lastDate) {
                 if (!$lastPeer) {
                     $lastPeer = $id;
-                    yield $mp->logger("lastPeer is set to $id.", Logger::ERROR);
+                    //yield $mp->logger("lastPeer is set to $id.", Logger::ERROR);
                 }
                 if (!$lastId) {
                     $lastId = $dialog['top_message'];
-                    yield $mp->logger("lastId is set to $lastId.", Logger::ERROR);
+                    //yield $mp->logger("lastId is set to $lastId.", Logger::ERROR);
                 }
                 foreach ($res['messages'] as $message) {
                     $idBot = yield $mp->getId($message);
@@ -551,7 +735,7 @@ function visitAllDialogs($mp, ?array $params, Closure $sliceCallback = null): \G
                         $lastId === $message['id']
                     ) {
                         $lastDate = $message['date'];
-                        yield $mp->logger("lastDate is set to $lastDate from {$message['id']}.", Logger::ERROR);
+                        //yield $mp->logger("lastDate is set to $lastDate from {$message['id']}.", Logger::ERROR);
                         break;
                     }
                 }
@@ -574,14 +758,56 @@ function visitAllDialogs($mp, ?array $params, Closure $sliceCallback = null): \G
         }
         if ($pauseMin > 0 || $pauseMax > 0) {
             $pause = $pauseMax <= $pauseMin ? $pauseMin : rand($pauseMin, $pauseMax);
-            yield $mp->echo("Pausing for $pause seconds. ..." . PHP_EOL);
-            yield $mp->logger("Pausing for $pause seconds. ...", Logger::ERROR);
-            yield $mp->logger(" ", Logger::ERROR);
+            //yield $mp->logger("Pausing for $pause seconds. ...", Logger::ERROR);
+            //yield $mp->logger(" ", Logger::ERROR);
             yield $mp->sleep($pause);
         } else {
-            yield $mp->logger(" ", Logger::ERROR);
+            //yield $mp->logger(" ", Logger::ERROR);
         }
     } // end of while/for
+}
+
+
+function getDialogs(object $eh, int $messageLimit, int $lastStopTime): \Generator
+{
+    $dialogs = [];
+    yield visitAllDialogs(
+        $eh,
+        [/*'max_dialogs' => 20*/],
+        function (
+            $ep,
+            int    $totalDialogs,
+            int    $index,
+            int    $botapiId,
+            string $subtype,
+            string $name,
+            array  $dialog,
+            array  $peerval,
+            ?array $message
+        )
+        use (&$dialogs, $eh, $messageLimit, $lastStopTime) {
+            if (false && $subtype === 'user') {
+                unset($dialog['notify_settings']);
+                unset($dialog['draft']);
+                if ($user['deleted'] ?? false) {
+                    $dialog['deleted'] = true;
+                }
+                if ($message !== null) {
+                    $dialog['date'] = $message['date'];
+                }
+                $dialogs[] = ['name' => $name] + $dialog;
+            }
+            if ($subtype === 'user' && !$peerval['self'] && $botapiId !== 777000 && $message && $message['from_id'] !== $eh->getRobotId()) {
+                //$out = ['botapi_id' => $botapiId, 'name' => $name, 'subtype' => $subtype];
+                //yield $eh->logger(toJSON($out),     Logger::ERROR);
+                //yield $eh->logger(toJSON($peerval), Logger::ERROR);
+                //yield $eh->logger(toJSON($message), Logger::ERROR);
+                $messageLimit = 3;
+                //$userType = yield verifyOldOrNew($eh, $botapiId, $dialog, $message, $messageLimit, $lastStopTime);
+            }
+        }
+    );
+    return $dialogs;
 }
 
 function resolveDialog($mp, array $dialog, array $messages, array $chats, array $users)
@@ -673,23 +899,42 @@ function resolveDialog($mp, array $dialog, array $messages, array $chats, array 
     ];
 }
 
-function newVisitor($mp, int $fromId, array $message,  int $messageLimit): Generator
-{
-    return true;
-    yield;
-}
-function verifyOldOrNew($mp, int $userId, array $dialog, array $message, int $messageLimit, int $lastStopTime): Generator
+/*
+function newVisitor(object $eh, int $fromId, array $message,  int $messageLimit): \Generator
 {
     if ($message === null) {
-        yield $mp->logger("Last Message: NONE", Logger::ERROR);
+        yield $eh->logger("Last Message: NONE", Logger::ERROR);
         return false;
     }
+    $peerDialogs =  yield $eh->messages->getPeerDialogs([
+        'peers' => [$fromId]
+    ]);
+    $dialog = $peerDialogs['dialogs'][0] ?? null;
+    if ($dialog) {
+        $inboxMaxId    = $dialog['read_inbox_max_id'];     // int  Position up to which all incoming messages are read.
+        $outboxMaxId   = $dialog['read_outbox_max_id'];    // int  Position up to which all outgoing messages are read.
+        $unreadCount   = $dialog['unread_count'];          // int  Number of unread messages.
+        $mentionsCount = $dialog['unread_mentions_count']; // int  Number of unread mentions.
+        if ($inboxMaxId === 0 || $outboxMaxId === 0 || $unreadCount > 0 || $mentionsCount > 0) {
+            yield $eh->logger("New Visitor: " . toJSON($dialog), Logger::ERROR);
+            return true;
+        }
+    }
+    return false;
+}
+function verifyOldOrNew(object $eh, int $userId, array $dialog, array $message, int $messageLimit, int $lastStopTime): Generator
+{
+    if ($message === null) {
+        yield $eh->logger("Last Message: NONE", Logger::ERROR);
+        return false;
+    }
+
     return false;
     //$user = yield $mp->users->getUsers(['id' => [$userId]]);
     //yield $mp->logger("The User: " . toJSON($user), Logger::ERROR);
     //yield $mp->logger("Last Message: " . toJSON($message), Logger::ERROR);
-    if (($message['from_id']) !== $mp->getRobotId()) {
-        $res = yield $mp->messages->getHistory([
+    if (($message['from_id']) !== $eh->getRobotId()) {
+        $res = yield $eh->messages->getHistory([
             'peer'        => $message,
             'limit'       => $messageLimit,
             'offset_id'   => 0,
@@ -704,12 +949,12 @@ function verifyOldOrNew($mp, int $userId, array $dialog, array $message, int $me
 
         $isNew = true;
         foreach ($res['messages'] as $idx => $msg) {
-            if ($msg['from_id'] === $mp->getRobotId()) {
+            if ($msg['from_id'] === $eh->getRobotId()) {
                 $isNew = false;
                 break;
             }
         }
-        yield $mp->logger("idx: '$idx'   " . ($isNew ? 'NEW' : "OLD"), Logger::ERROR);
+        yield $eh->logger("idx: '$idx'   " . ($isNew ? 'NEW' : "OLD"), Logger::ERROR);
         $mostRecent = \max($mp->startTime - 60 * 60 * 24 * 7, $lastStopTime);
         if ($message['date'] > $mostRecent) {
             if ($isNew) {
@@ -721,3 +966,4 @@ function verifyOldOrNew($mp, int $userId, array $dialog, array $message, int $me
     }
     return $isNew;
 }
+*/
