@@ -15,9 +15,6 @@ class WelcomePlugin implements Plugin
 
     public function onStart(string $session, EventHandler $eh): \Generator
     {
-        return;
-
-
         $userIds = [];
         $titles  = [];
         $msgIds  = [];
