@@ -15,6 +15,7 @@ class WelcomePlugin implements Plugin
 
     public function onStart(string $session, EventHandler $eh): \Generator
     {
+        return;   // Comment out if you wish!
         $userIds = [];
         $titles  = [];
         $msgIds  = [];
@@ -78,21 +79,21 @@ class WelcomePlugin implements Plugin
 
     public function process(array $update, string $session, EventHandler $eh = null, array $vars = null): \Generator
     {
-        $robotId   = $eh->getRobotId();
-        $fromId    = $update['message']['from_id'] ?? 0;
-        $peerType  = $update['message']['to_id']['_'] ?? '';
-        $peer      = $update['message']['to_id'] ?? null;
-        $toRobot   = $peerType === 'peerUser' && $peer['user_id'] === $robotId;
-        $byRobot   = $fromId   === $robotId;
-        $fromUser  = $peerType === 'peerUser';
-        $byVisitor = $toRobot && $fromUser && !$byRobot;
+        $robotId  = $eh->getRobotId();
+        $fromId   = $update['message']['from_id'] ?? 0;
+        $peerType = $update['message']['to_id']['_'] ?? '';
+        $peer     = $update['message']['to_id'] ?? null;
+        $toRobot  = $peerType === 'peerUser' && $peer['user_id'] === $robotId;
+        $byRobot  = $fromId === $robotId;
 
-        if (!$byVisitor) {
+        if (!$toRobot || $byRobot) {
             return false;
         }
-        $peerDialogs =  yield $eh->messages->getPeerDialogs([
+        $peerDialogs = yield $eh->messages->getPeerDialogs([
             'peers' => [$fromId]
         ]);
+        yield $eh->logger("Visitor: " . toJSON($peerDialogs), Logger::ERROR);
+
         $peerDialog = $peerDialogs['dialogs'][0] ?? null;
         if (!$peerDialog) {
             return false;
@@ -105,12 +106,10 @@ class WelcomePlugin implements Plugin
         if ($robotId === $message['from_id'] ?? 0) {
             return false;
         }
-        $dialog        = $peerDialog['dialogs'][0];
-        $topMessage    = $dialog['top_message'];           // int  The latest message ID
-        $inboxMaxId    = $dialog['read_inbox_max_id'];     // int  Position up to which all incoming messages are read.
-        $outboxMaxId   = $dialog['read_outbox_max_id'];    // int  Position up to which all outgoing messages are read.  Zero mean no response are sent
-        $unreadCount   = $dialog['unread_count'];          // int  Number of unread messages.
-        $mentionsCount = $dialog['unread_mentions_count']; // int  Number of unread mentions.
+        $dialog      = $peerDialog['dialogs'][0];
+        $topMessage  = $dialog['top_message'];           // int  The latest message ID
+        $inboxMaxId  = $dialog['read_inbox_max_id'];     // int  Position up to which all incoming messages are read.
+        $outboxMaxId = $dialog['read_outbox_max_id'];    // int  Position up to which all outgoing messages are read.  Zero mean no response are sent
         if ($outboxMaxId === 0 && $inboxMaxId > 0 && $topMessage > 0) {
             yield $eh->logger(" ", Logger::ERROR);
             yield $eh->logger("New Visitor: ", Logger::ERROR);
