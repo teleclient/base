@@ -12,12 +12,17 @@ use function\Amp\File\{get, put, exists, getSize};
 
 class BuiltinPlugin implements Plugin
 {
+    private $totalUpdates = 0;
+
     public function __construct()
     {
     }
 
     public function onStart(string $session, EventHandler $eh): \Generator
     {
+        $this->totalUpdates = 0;
+
+        // Send a startup notification and wipe it if configured so 
         $nowstr = date('d H:i:s', $eh->getStartTime());
         $text = SCRIPT_NAME . ' ' . SCRIPT_VERSION . ' started at ' . $nowstr . ' on ' . hostName() . ' using ' . $eh->getRobotName() . ' account.';
         $notif      = $eh->getNotif();
@@ -46,25 +51,12 @@ class BuiltinPlugin implements Plugin
                 })());
             }
         }
-
-        $robotId      = $eh->getRobotId();
-        $robotName    = $eh->getRobotName();
-        $officeId     = $eh->getOfficeId();
-        $admins       = $eh->getAdmins();
-        $adminsJson = '[';
-        foreach ($admins as $idx => $admin) {
-            if ($idx === 0) {
-                $adminsJson .= "$admin";
-            } else {
-                $adminsJson .=  ", $admin";
-            }
-            $adminsJson .=  "]";
-        }
-        yield $eh->logger("officeId:$officeId  robotId:$robotId  admins: $adminsJson", Logger::ERROR);
     }
 
     public function process(array $update, string $session, EventHandler $eh = null, array $vars = null): \Generator
     {
+        $this->totalUpdates += 1;
+
         if (
             $update['message']['_'] === 'messageService' ||
             $update['message']['_'] === 'messageEmpty'
@@ -76,16 +68,15 @@ class BuiltinPlugin implements Plugin
         $robotName    = $eh->getRobotName();
         $officeId     = $eh->getOfficeId();
         $admins       = $eh->getAdmins();
-        $oldAge       = $eh->getOldAge();
         $startTime    = $eh->getStartTime();
-        $totalUpdates = $eh->getTotalUpdates();
+        $editMessage  = $eh->getEditMessage();
+        $processCommands = $eh->getProcessCommands();
         $command      = $vars['command'];
 
         $verb         = $command['verb'];
         $params       = $command['params'];
-        $msgAge       = $startTime - $update['message']['date'];
         $msgType      = $update['_'];
-        $msgDate      = $update['message']['date']    ?? null;
+        $msgDate      = $update['message']['date'] ?? null;
         $msgId        = $update['message']['id'] ?? 0;
         $msgText      = $update['message']['message'] ?? null;
         $fromId       = $update['message']['from_id'] ?? 0;
@@ -93,17 +84,13 @@ class BuiltinPlugin implements Plugin
         $peerType     = $update['message']['to_id']['_'] ?? '';
         $peer         = $update['message']['to_id'] ?? null;
         $isOutward    = $update['message']['out'] ?? false;
-        $moment       = $startTime;
 
-        $byRobot      = $fromId   === $robotId && $msgText;
+        $fromRobot    = $fromId   === $robotId && $msgText;
         $toRobot      = $peerType === 'peerUser' && $peer['user_id'] === $robotId && $msgText;
         $toOffice     = $peerType === 'peerChannel' && $peer['channel_id'] === $officeId;
-        $byVisitor    = !$byRobot && $toRobot;
         $fromAdmin    = in_array($fromId, $admins);
-        $replyToRobot = $replyToId === $robotId && $msgText;
-        $editMessage = false;
 
-        switch ($fromAdmin && $toOffice && $verb ? $verb : '') {
+        switch ($processCommands && $fromAdmin && $toOffice && $verb ? $verb : '') {
             case '':
                 // Not a verb and/or not sent by an admin.
                 break;
@@ -125,36 +112,7 @@ class BuiltinPlugin implements Plugin
                 break;
         }
 
-
-        // Recognize and log old or new commands and reactions.
-        /*
-        if ($byRobot && $toRobot && $msgType === 'updateNewMessage') {
-            $new = $msgAge <= $oldAge;
-            if ($verb) {
-                $age = $new ? 'New' : 'Old';
-                yield $eh->logger(
-                    "$age Command:{verb:'$verb', time:" . date('H:i:s', $msgDate) .
-                        ", now:" . date('H:i:s', $moment) . ", age:$msgAge}",
-                    Logger::ERROR
-                );
-            }
-        }
-        */
-
-        // Start the Command Processing Engine
-        /*
-        if (
-            !$eh->processCommands &&
-            $byRobot && $toRobot &&
-            $msgType === 'updateNewMessage' &&
-            $msgAge <= $eh->oldAge
-        ) {
-            $eh->processCommands = true;
-            yield $eh->logger('Command-Processing engine started at ' . date('H:i:s', $moment), Logger::ERROR);
-        }
-        */
-
-        if ($byRobot && $toRobot && $verb && $eh->processCommands && $msgType === 'updateNewMessage') {
+        if ($fromRobot && $toRobot && $verb && $processCommands && $msgType === 'updateNewMessage') {
             switch ($verb) {
                 case 'help':
                     $text = '' .
@@ -195,7 +153,7 @@ class BuiltinPlugin implements Plugin
                         $lastLaunchMethod   = $launch['launch_method'];
                         $durationNano       = $lastEndTime - $lastStartTime;
                         $duration           = $lastEndTime ? \formatDuration($durationNano) : 'NOT AVAILABLE';
-                        $lastLaunchDuration = strval($duration) . " secs";
+                        $lastLaunchDuration = strval($duration);
                         $lastPeakMemory     = getSizeString($launch['memory_end']);
                     } else {
                         $lastEndTime        = 'NOT AVAILABLE';
@@ -372,10 +330,10 @@ class BuiltinPlugin implements Plugin
                     $text = 'Robot is stopping ...';
                     yield respond($eh, $peer, $msgId, $text, $editMessage);
                     yield $eh->logger($text . 'at ' . date('d H:i:s!'), Logger::ERROR);
-                    $eh->setStopReason($verb === 'stop' ? 'stop' : 'logout');
+                    $eh->setStopReason($verb);
                     break;
                 default:
-                    $text = 'Invalid command: ' . "'" . $msgText . "'  received at " . date('d H:i:s', $moment);
+                    $text = 'Invalid command: ' . "'" . $msgText . "'  received at " . date('d H:i:s', $eh->getStartTime());
                     yield respond($eh, $peer, $msgId, $text, $editMessage);
                     break;
 
@@ -395,7 +353,7 @@ class BuiltinPlugin implements Plugin
         } // end of the commander qualification check
 
         //Function: Finnish executing the Stop command.
-        if ($byRobot && $msgText === 'Robot is stopping ...') {
+        if ($fromRobot && $msgText === 'Robot is stopping ...') {
             if (Shutdown::removeCallback('restarter')) {
                 yield $eh->logger('Self-Restarter disabled.', Logger::ERROR);
             }
@@ -405,25 +363,16 @@ class BuiltinPlugin implements Plugin
 
         return false;
     }
-}
 
-
-function respond(object $eh, array $peer, int $msgId, string $text, $editMessage = false): \Generator
-{
-    if ($editMessage) {
-        $result = yield $eh->messages->editMessage([
-            'peer'       => $peer,
-            'id'         => $msgId,
-            'message'    => $text,
-            'parse_mode' => 'HTML',
-        ]);
-    } else {
-        $result = yield $eh->messages->sendMessage([
-            'peer'            => $peer,
-            'reply_to_msg_id' => $msgId,
-            'message'         => $text,
-            'parse_mode'      => 'HTML',
-        ]);
+    public function getNotif(): array
+    {
+        $notif['state'] = $this->__get('notif_state');
+        $notif['age']   = $this->__get('notif_age');
+        return $notif;
     }
-    return $result;
+    public function setNotif($state, $age = null): void
+    {
+        $this->__set('notif_state', $state);
+        $this->__set('notif_age',   $age);
+    }
 }

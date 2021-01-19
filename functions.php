@@ -256,7 +256,7 @@ class ArrayInt64
 
 function authorized($api): int
 {
-    return $api->API->authorized;
+    return $api ? ($api->API ? $api->API->authorized : 4) : 5;
 }
 function getAuthorized(int $authorized): string
 {
@@ -271,8 +271,12 @@ function getAuthorized(int $authorized): string
             return 'WAITING_PASSWORD';
         case -1:
             return 'WAITING_SIGNUP';
+        case 4:
+            return 'INVALID_APP';
+        case 5:
+            return 'NULL_API_OBJECT';
         default:
-            throw new Exception("Invalid authorization status: $authorized");
+            throw new \ErrorException("Invalid authorization status: $authorized");
     }
 }
 
@@ -384,11 +388,11 @@ function updateLaunchRecord(string $fileName, int $scriptStartTime, int $scriptE
     foreach ($lines as $line) {
         if (strStartsWith($line, $key)) {
             $items = explode(' ', $line);
-            $record['time_start']    = $items[0]; // $scriptStartTime
+            $record['time_start']    = intval($items[0]); // $scriptStartTime
             $record['time_end']      = $scriptEndTime;
             $record['launch_method'] = $items[2]; // \getLaunchMethod();
             $record['stop_reason']   = $stopReason;
-            $record['memory_start']  = $items[4];
+            $record['memory_start']  = intval($items[4]);
             $record['memory_end']    = \getPeakMemory();
             $new = "{$record['time_start']} {$record['time_end']} {$record['launch_method']} {$record['stop_reason']} {$record['memory_start']} {$record['memory_end']}";
             $content .= $new . "\n";
@@ -898,6 +902,28 @@ function resolveDialog($mp, array $dialog, array $messages, array $chats, array 
         'message'      => $message
     ];
 }
+
+
+function respond(object $eh, array $peer, int $msgId, string $text, $editMessage = false): \Generator
+{
+    if ($editMessage) {
+        $result = yield $eh->messages->editMessage([
+            'peer'       => $peer,
+            'id'         => $msgId,
+            'message'    => $text,
+            'parse_mode' => 'HTML',
+        ]);
+    } else {
+        $result = yield $eh->messages->sendMessage([
+            'peer'            => $peer,
+            'reply_to_msg_id' => $msgId,
+            'message'         => $text,
+            'parse_mode'      => 'HTML',
+        ]);
+    }
+    return $result;
+}
+
 
 /*
 function newVisitor(object $eh, int $fromId, array $message,  int $messageLimit): \Generator
