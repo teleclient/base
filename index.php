@@ -22,7 +22,7 @@ if (\file_exists('vendor/autoload.php')) {
 }
 
 define("SCRIPT_NAME",    'Base');
-define("SCRIPT_VERSION", 'V1.2.2');
+define("SCRIPT_VERSION", 'V1.2.3');
 define('SESSION_FILE',   'session.madeline');
 define('SERVER_NAME',    '');
 define('SAPI_NAME', (PHP_SAPI === 'cli') ? (isset($_SERVER['TERM']) ? 'Shell' : 'Cron') : 'Web');
