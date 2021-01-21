@@ -18,7 +18,8 @@ class EmptyPlugin implements Plugin
         return;
         yield;
     }
-    public function process(array $update, string $session, EventHandler $eh = null, array $vars = null): \Generator
+
+    public function __invoke(array $update, string $session, EventHandler $eh = null, array $vars = null): \Generator
     {
         $session = '';
 

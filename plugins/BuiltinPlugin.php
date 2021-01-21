@@ -53,7 +53,8 @@ class BuiltinPlugin implements Plugin
         }
     }
 
-    public function process(array $update, string $session, EventHandler $eh = null, array $vars = null): \Generator
+    //public function process(array $update, string $session, EventHandler $eh = null, array $vars = null): \Generator
+    public function __invoke(array $update, string $session, EventHandler $eh = null, array $vars = null): \Generator
     {
         $this->totalUpdates += 1;
 
@@ -152,14 +153,14 @@ class BuiltinPlugin implements Plugin
                         $lastEndTime        = strval($launch['time_end']);
                         $lastLaunchMethod   = $launch['launch_method'];
                         $durationNano       = $lastEndTime - $lastStartTime;
-                        $duration           = $lastEndTime ? \formatDuration($durationNano) : 'NOT AVAILABLE';
+                        $duration           = $lastEndTime ? \formatDuration($durationNano) : 'UNAVAILABLE';
                         $lastLaunchDuration = strval($duration);
                         $lastPeakMemory     = getSizeString($launch['memory_end']);
                     } else {
-                        $lastEndTime        = 'NOT AVAILABLE';
-                        $lastLaunchMethod   = 'NOT AVAILABLE';
-                        $lastLaunchDuration = 'NOT AVAILABLE';
-                        $lastPeakMemory     = 'NOT AVAILABLE';
+                        $lastEndTime        = 'UNAVAILABLE';
+                        $lastLaunchMethod   = 'UNAVAILABLE';
+                        $lastLaunchDuration = 'UNAVAILABLE';
+                        $lastPeakMemory     = 'UNAVAILABLE';
                     }
                     $notif = $eh->getNotif();
                     $notifStr = 'OFF';

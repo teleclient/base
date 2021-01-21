@@ -14,7 +14,6 @@ use teleclient\base\plugins\VerifyPlugin;
 use teleclient\base\plugins\EmptyPlugin;
 use teleclient\base\plugins\BuiltinPlugin;
 use \danog\MadelineProto\Logger;
-use \danog\MadelineProto\APIWrapper;
 use \danog\MadelineProto\Shutdown;
 use \danog\MadelineProto\EventHandler as MadelineEventHandler;
 use function\Amp\File\{get, put, exists, getSize};
@@ -31,7 +30,6 @@ class EventHandler extends MadelineEventHandler
 
     private $startTime;
     private $stopTime;
-    //private $totalUpdates;
 
     private $robotId;     // id of this worker.
     private $robotName;   // username, firstname, or the id of the robot.
@@ -47,21 +45,18 @@ class EventHandler extends MadelineEventHandler
     private $processCommands = false;
     private $editMessage     = false;
 
-
-    public function __construct(?APIWrapper $API)
+    public function __construct()
     {
-        parent::__construct($API);
+        $this->verifyPlugin  = new  VerifyPlugin($this);
+        $this->emptyPlugin   = new   EmptyPlugin($this);
+        $this->welcomePlugin = new   EmptyPlugin($this);
+        $this->builtinPlugin = new BuiltinPlugin($this);
 
-        $this->verifyPlugin  = new  VerifyPlugin($API);
-        $this->emptyPlugin   = new   EmptyPlugin($API);
-        $this->welcomePlugin = new   EmptyPlugin($API);
-        $this->builtinPlugin = new BuiltinPlugin($API);
-
-        $this->startTime  = time();
-        $this->stopTime   = 0;
-        $this->stopReason = 'UNKNOWN';
-
-        $this->officeId  = 1373853876;
+        $this->startTime        = time();
+        $this->stopTime         = 0;
+        $this->stopReason       = 'UNKNOWN';
+        $this->processCommands  = false;
+        $this->officeId         = 1373853876;
     }
 
     public function __magic_sleep()
@@ -157,8 +152,6 @@ class EventHandler extends MadelineEventHandler
         $command = parseCommand($update['message']['message'] ?? null);
         $vars    = ['command' => $command];
 
-        $this->totalUpdates += 1;
-
         $robotId      = $this->getRobotId();
         $robotName    = $this->getRobotName();
         $officeId     = $this->getOfficeId();
@@ -180,6 +173,16 @@ class EventHandler extends MadelineEventHandler
         $toOffice  = $peerType === 'peerChannel' && $peer['channel_id'] === $officeId;
         $fromAdmin = in_array($fromId, $admins);
 
+        // Start the Command Processing Engine based on the date of a received command
+        if (
+            $verb && !$this->getProcessCommands() &&
+            $msgIsNew && $msgType === 'updateNewMessage' &&
+            ($fromRobot && ($toRobot || $toOffice) || $fromAdmin && $toOffice)
+        ) {
+            $this->processCommands = true;
+            yield $this->logger('Command-Processing engine started at ' . date('d H:i:s'), Logger::ERROR);
+        }
+
         // Recognize and log old or new commands.
         if ($verb && ($fromRobot && ($toRobot || $toOffice) || $fromAdmin && $toOffice) && $msgType === 'updateNewMessage') {
             $start = date('H:i:s', $this->getStartTime());
@@ -193,68 +196,60 @@ class EventHandler extends MadelineEventHandler
             yield $this->logger($text, Logger::ERROR);
         }
 
-        // Start the Command Processing Engine
-        if (
-            $verb && !$this->getProcessCommands() &&
-            $msgIsNew && $msgType === 'updateNewMessage' &&
-            ($fromRobot && ($toRobot || $toOffice) || $fromAdmin && $toOffice)
-        ) {
-            $this->processCommands = true;
-            yield $this->logger('Command-Processing engine started at ' . date('d H:i:s'), Logger::ERROR);
-        }
-
         // Log some information for debugging
         if (($fromRobot || $toRobot || $fromAdmin || $toOffice) &&  true) {
             $from = $fromRobot ? 'robot' : ($fromAdmin ? strval($fromId) : ('?' . strval($fromId) . '?'));
             $to   =   $toRobot ? 'robot' : ($toOffice ? 'office' : '?' . 'peer' . '?');
-            $criteria = ['from' => $from, 'to' => $to, 'process' => $this->getProcessCommands];
-            $criteria[$verb ? 'action' : 'reaction'] = mb_substr($msgText, 0, 40);
+            $criteria = [
+                'from'    => $from,
+                'to'      => $to,
+                'process' => ($this->getProcessCommands ? 'true' : 'false'),
+                ($verb ? 'action' : 'reaction') => mb_substr($msgText ?? '_NULL_', 0, 40)
+            ];
             $this->logger(toJSON($criteria, false), Logger::ERROR);
         }
         if ($fromAdmin || $toOffice) {
-            yield $this->logger("fromId: $fromId, toOffice:" . ($toOffice ? 'true' : 'false'), Logger::ERROR);
-            yield $this->logger(toJSON($update), Logger::ERROR);
+            $text = "fromId: $fromId, toOffice:" . ($toOffice ? 'true' : 'false');
+            //yield $this->logger("fromId: $fromId, toOffice:" . ($toOffice ? 'true' : 'false'), Logger::ERROR);
+            yield $this->logger($text . ' ' . toJSON($update), Logger::ERROR);
         }
 
-        $processed = yield $this->dispatchOnUpdate($update, $session, $vars);
-        return $processed;
-        /*
-        $processed = yield $this->verifyPlugin->process($update, $session, $this, $vars);
+        //yield $this->dispatchEvent($update, $session, $vars);
+        $processed = yield ($this->verifyPlugin)($update, $session, $this, $vars);
+        if ($processed) {
+            //return;
+        }
+        $processed = yield ($this->emptyPlugin)($update, $session, $this, $vars);
+        if ($processed) {
+            //return;
+        }
+        $processed = yield ($this->welcomePlugin)($update, $session, $this, $vars);
+        if ($processed) {
+            //return;
+        }
+        $processed = yield ($this->builtinPlugin)($update, $session, $this, $vars);
         if ($processed) {
             return;
         }
-        $processed = yield $this->emptyPlugin->process($update, $session, $this, $vars);
-        if ($processed) {
-            return;
-        }
-        $processed = yield $this->welcomePlugin->process($update, $session, $this, $vars);
-        if ($processed) {
-            return;
-        }
-        $processed = yield $this->builtinPlugin->process($update, $session, $this, $vars);
-        if ($processed) {
-            return;
-        }
-        */
     }
 
-    private function dispatchOnUpdate($update, $session, $vars): \Generator
+    private function dispatchEvent($update, $session, $vars): \Generator
     {
         $processed = yield $this->verifyPlugin->process($update, $session, $this, $vars);
         if ($processed) {
-            return true;
+            //return true;
         }
         $processed = yield $this->emptyPlugin->process($update, $session, $this, $vars);
         if ($processed) {
-            return true;
+            //return true;
         }
         $processed = yield $this->welcomePlugin->process($update, $session, $this, $vars);
         if ($processed) {
-            return true;
+            //return true;
         }
         $processed = yield $this->builtinPlugin->process($update, $session, $this, $vars);
         if ($processed) {
-            return true;
+            //return true;
         }
         return false;
     }

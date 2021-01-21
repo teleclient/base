@@ -20,8 +20,9 @@ ini_set('display_errors',         '1');                 // FALSE only in product
 ini_set('log_errors',             '1');                 // Error logging engine
 ini_set('error_log',              'MadelineProto.log'); // Logging file path
 set_include_path(\get_include_path() . PATH_SEPARATOR . dirname(__DIR__, 1));
-pcntl_async_signals(true);
-
+if (function_exists('pcntl_async_signals')) {
+    pcntl_async_signals(true);
+}
 define("SCRIPT_NAME",       'Base');
 define("SCRIPT_VERSION",    'V2.0.0');
 define('SESSION_FILE',      'session.madeline');
@@ -49,7 +50,7 @@ require_once 'EventHandler.php';
 use \danog\MadelineProto\Logger;
 use \danog\MadelineProto\API;
 use \danog\MadelineProto\Shutdown;
-use \danog\MadelineProto\Magic;
+use \danog\MadelineProto\Tools;
 use \danog\MadelineProto\Loop\Generic\GenericLoop;
 use function\Amp\File\{get, put, exists, getSize};
 
@@ -65,7 +66,6 @@ $settings['logger']['logger_level'] = Logger::ERROR;
 $settings['logger']['logger'] = Logger::FILE_LOGGER;
 $settings['peer']['full_info_cache_time'] = 60;
 $settings['serialization']['cleanup_before_serialization'] = true;
-$settings['serialization']['serialization_interval'] = 60;
 $settings['app_info']['app_version']    = SCRIPT_NAME . ' ' . SCRIPT_VERSION;
 $settings['app_info']['system_version'] =  \hostname() . ' ' . PHP_SAPI === 'cli' ? 'CLI' : "WEB";
 
@@ -83,6 +83,10 @@ Shutdown::addCallback(
         if ($MadelineProto) {
             try {
                 $stopReason = $MadelineProto->getEventHandler()->getStopReason();
+                if ($stopReason === 'UNKNOWN') {
+                    $error = \error_get_last();
+                    $stopReason = isset($error) ? 'error' : $stopReason;
+                }
             } catch (\TypeError $e) {
                 $stopReason = 'sigterm';
             }
@@ -124,6 +128,9 @@ $genLoop = new GenericLoop(
     },
     'Repeating Loop'
 );
+
+//$msgIds = Tools::getVar($MadelineProto->API, 'msg_ids');
+//Logger::log(toJSON($msgIds), Logger::ERROR);
 
 $maxRecycles = 5;
 safeStartAndLoop($MadelineProto, \teleclient\base\EventHandler::class,  $genLoop, $maxRecycles);
@@ -168,17 +175,17 @@ function makeWebServerName(): ?string
 
 function sanityCheck(API $MadelineProto, int $apiCreationStart, int $apiCreationEnd): void
 {
-    $variables['session_file']       = SESSION_FILE;
-    $variables['script_start_time']  = SCRIPT_START_TIME;
-    $variables['memory_limit']       = MEMORY_LIMIT;
-    $variables['script_name']        = SCRIPT_NAME;
-    $variables['script_version']     = SCRIPT_VERSION;
-    $variables['os_family']          = PHP_OS_FAMILY;
-    $variables['server_name']        = SERVER_NAME;
-    $variables['session_file']       = SESSION_FILE;
-    $variables['startups_file']      = STARTUPS_FILE;
-    $variables['launches_file']      = LAUNCHES_FILE;
-    $variables['php_version']        = PHP_VERSION;
+    $variables['session_file']        = SESSION_FILE;
+    $variables['script_start_time']   = SCRIPT_START_TIME;
+    $variables['memory_limit']        = MEMORY_LIMIT;
+    $variables['script_name']         = SCRIPT_NAME;
+    $variables['script_version']      = SCRIPT_VERSION;
+    $variables['os_family']           = PHP_OS_FAMILY;
+    $variables['server_name']         = SERVER_NAME;
+    $variables['session_file']        = SESSION_FILE;
+    $variables['startups_file']       = STARTUPS_FILE;
+    $variables['launches_file']       = LAUNCHES_FILE;
+    $variables['php_version']         = PHP_VERSION;
     $variables['api_creation_start']  = $apiCreationStart;
     $variables['api_creation_end']    = $apiCreationEnd;
     $variables['authorization_state'] = getAuthorized(authorized($MadelineProto));
@@ -191,5 +198,76 @@ function sanityCheck(API $MadelineProto, int $apiCreationStart, int $apiCreation
     } else {
         $MadelineProto->logger("variables: " . toJSON($variables), Logger::ERROR);
         unset($variables);
+    }
+}
+
+
+
+
+function startAndLoop(object $eh, string $eventHandler)
+{
+    $eh->async(true);
+    $errors = [];
+    while (true) {
+        try {
+            $started = false;
+            yield $eh->start();
+            yield $eh->setEventHandler($eventHandler);
+            $started = true;
+            Tools::wait(yield from $eh->API->loop());
+            break;
+        } catch (\Throwable $e) {
+            $errors = [\time() => $errors[\time()] ?? 0];
+            $errors[\time()]++;
+            if ($errors[\time()] > 10 && (!$eh->inited() || !$started)) {
+                // Display Errors
+                $eh->logger->logger("More than 10 errors in a second and not inited, exiting!", Logger::FATAL_ERROR);
+                break;
+            }
+            echo $e;
+            $eh->logger->logger((string) $e, Logger::FATAL_ERROR);
+            $eh->report("Surfaced: $e");
+        }
+    }
+}
+
+
+
+function startAndLoop_ORIG(object $eh, string $eventHandler): void
+{
+    while (true) {
+        try {
+            Tools::wait($eh->startAndLoopAsync_ORIG($eventHandler));
+            return;
+        } catch (\Throwable $e) {
+            $eh->logger->logger((string) $e, Logger::FATAL_ERROR);
+            $eh->report("Surfaced: $e");
+        }
+    }
+}
+
+function startAndLoopAsync_ORIG(object $eh, string $eventHandler): \Generator
+{
+    $eh->async(true);
+
+    $started = false;
+    $errors = [];
+    while (true) {
+        try {
+            yield $this->start();
+            yield $this->setEventHandler($eventHandler);
+            $started = true;
+            return yield from $this->API->loop();
+        } catch (\Throwable $e) {
+            $errors = [\time() => $errors[\time()] ?? 0];
+            $errors[\time()]++;
+            if ($errors[\time()] > 10 && (!$this->inited() || !$started)) {
+                $this->logger->logger("More than 10 errors in a second and not inited, exiting!", Logger::FATAL_ERROR);
+                return;
+            }
+            echo $e;
+            $this->logger->logger((string) $e, Logger::FATAL_ERROR);
+            $this->report("Surfaced: $e");
+        }
     }
 }

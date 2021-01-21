@@ -77,16 +77,17 @@ class WelcomePlugin implements Plugin
         }
     }
 
-    public function process(array $update, string $session, EventHandler $eh = null, array $vars = null): \Generator
+    public function __invoke(array $update, string $session, EventHandler $eh = null, array $vars = null): \Generator
     {
-        $robotId  = $eh->getRobotId();
-        $fromId   = $update['message']['from_id'] ?? 0;
-        $peerType = $update['message']['to_id']['_'] ?? '';
-        $peer     = $update['message']['to_id'] ?? null;
-        $toRobot  = $peerType === 'peerUser' && $peer['user_id'] === $robotId;
-        $byRobot  = $fromId === $robotId;
+        yield $eh->echo("WelcomePlugin Processing started!" . PHP_EOL);
+        $robotId   = $eh->getRobotId();
+        $fromId    = $update['message']['from_id'] ?? 0;
+        $peerType  = $update['message']['to_id']['_'] ?? '';
+        $peer      = $update['message']['to_id'] ?? null;
+        $toRobot   = $peerType === 'peerUser' && $peer['user_id'] === $robotId;
+        $fromRobot = $fromId === $robotId;
 
-        if (!$toRobot || $byRobot) {
+        if (!$toRobot || $fromRobot) {
             return false;
         }
         $peerDialogs = yield $eh->messages->getPeerDialogs([
@@ -107,9 +108,9 @@ class WelcomePlugin implements Plugin
             return false;
         }
         $dialog      = $peerDialog['dialogs'][0];
-        $topMessage  = $dialog['top_message'];           // int  The latest message ID
-        $inboxMaxId  = $dialog['read_inbox_max_id'];     // int  Position up to which all incoming messages are read.
-        $outboxMaxId = $dialog['read_outbox_max_id'];    // int  Position up to which all outgoing messages are read.  Zero mean no response are sent
+        $topMessage  = $dialog['top_message'];        // int  The latest message ID
+        $inboxMaxId  = $dialog['read_inbox_max_id'];  // int  Position up to which all incoming messages are read.
+        $outboxMaxId = $dialog['read_outbox_max_id']; // int  Position up to which all outgoing messages are read.  Zero mean no response are sent
         if ($outboxMaxId === 0 && $inboxMaxId > 0 && $topMessage > 0) {
             yield $eh->logger(" ", Logger::ERROR);
             yield $eh->logger("New Visitor: ", Logger::ERROR);

@@ -21,5 +21,5 @@ interface Plugin
 {
     public function onStart(string $session, EventHandler $eh): \Generator;
 
-    public function process(array $update, string $session, EventHandler $eh = null, array $vars = null): \Generator;
+    public function __invoke(array $update, string $session, EventHandler $eh = null, array $vars = null): \Generator;
 }

@@ -13,7 +13,7 @@ use \danog\MadelineProto\Loop\Generic\GenericLoop;
 use \danog\MadelineProto\RPCErrorException;
 use function\Amp\File\{get, put, exists, getSize};
 
-function toJSON($var, bool $pretty = true): string
+function toJSON($var, bool $pretty = true) // bool|string
 {
     if (isset($var['request'])) {
         unset($var['request']);
