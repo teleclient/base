@@ -67,19 +67,21 @@ Shutdown::addCallback(
 
 $signal  = null;
 Loop::run(function () use (&$signal) {
-    $siginit = Loop::onSignal(SIGINT, static function () use (&$signal) {
-        $signal = 'sigint';
-        Logger::log('Got sigint', Logger::FATAL_ERROR);
-        Magic::shutdown(1);
-    });
-    Loop::unreference($siginit);
+    if (\defined('SIGINT')) {
+        $siginit = Loop::onSignal(SIGINT, static function () use (&$signal) {
+            $signal = 'sigint';
+            Logger::log('Got sigint', Logger::FATAL_ERROR);
+            Magic::shutdown(1);
+        });
+        Loop::unreference($siginit);
 
-    $sigterm = Loop::onSignal(SIGTERM, static function () use (&$signal) {
-        $signal = 'sigterm';
-        Logger::log('Got sigterm', Logger::FATAL_ERROR);
-        Magic::shutdown(1);
-    });
-    Loop::unreference($sigterm);
+        $sigterm = Loop::onSignal(SIGTERM, static function () use (&$signal) {
+            $signal = 'sigterm';
+            Logger::log('Got sigterm', Logger::FATAL_ERROR);
+            Magic::shutdown(1);
+        });
+        Loop::unreference($sigterm);
+    }
 });
 
 $settings['app_info']['api_id']   = 904912; //6;                                  // <== Use your own, or let MadelineProto ask you.
