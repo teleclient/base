@@ -19,10 +19,8 @@ ini_set('display_startup_errors', '1');
 ini_set('display_errors',         '1');                 // FALSE only in production or real server
 ini_set('log_errors',             '1');                 // Error logging engine
 ini_set('error_log',              'MadelineProto.log'); // Logging file path
-set_include_path(\get_include_path() . PATH_SEPARATOR . dirname(__DIR__, 1));
-if (function_exists('pcntl_async_signals')) {
-    pcntl_async_signals(true);
-}
+//set_include_path(\get_include_path() . PATH_SEPARATOR . dirname(__DIR__, 1));
+
 define("SCRIPT_NAME",       'Base');
 define("SCRIPT_VERSION",    'V2.0.0');
 define('SESSION_FILE',      'session.madeline');
@@ -32,8 +30,13 @@ define("STARTUPS_FILE",     makeDataFile(DATA_DIRECTORY, 'startups.txt'));
 define("LAUNCHES_FILE",     makeDataFile(DATA_DIRECTORY, 'launches.txt'));
 define("MEMORY_LIMIT",      ini_get('memory_limit'));
 define('SERVER_NAME',       makeWebServerName());
+define('MAX_RECYCLES',      5);
 
 $launch = appendLaunchRecord(LAUNCHES_FILE, SCRIPT_START_TIME);
+error_log('');
+error_log('==========================================================');
+error_log(SCRIPT_NAME . ' ' . SCRIPT_VERSION . ' started at ' . date('H:i:s') . " by '{$launch['launch_method']}' launch method.");
+error_log('==========================================================');
 error_log(toJSON($launch));
 unset($launch);
 
@@ -51,7 +54,9 @@ use \danog\MadelineProto\Logger;
 use \danog\MadelineProto\API;
 use \danog\MadelineProto\Shutdown;
 use \danog\MadelineProto\Tools;
+use \danog\MadelineProto\Magic;
 use \danog\MadelineProto\Loop\Generic\GenericLoop;
+use Amp\Loop;
 use function\Amp\File\{get, put, exists, getSize};
 
 Shutdown::addCallback(
@@ -60,8 +65,25 @@ Shutdown::addCallback(
     'duration'
 );
 
-$settings['app_info']['api_id']   = 6;                                  // <== Use your own, or let MadelineProto ask you.
-$settings['app_info']['api_hash'] = "eb06d4abfb49dc3eeb1aeb98ae0f581e"; // <== Use your own, or let MadelineProto ask you.
+$signal  = null;
+Loop::run(function () use (&$signal) {
+    $siginit = Loop::onSignal(SIGINT, static function () use (&$signal) {
+        $signal = 'sigint';
+        Logger::log('Got sigint', Logger::FATAL_ERROR);
+        Magic::shutdown(1);
+    });
+    Loop::unreference($siginit);
+
+    $sigterm = Loop::onSignal(SIGTERM, static function () use (&$signal) {
+        $signal = 'sigterm';
+        Logger::log('Got sigterm', Logger::FATAL_ERROR);
+        Magic::shutdown(1);
+    });
+    Loop::unreference($sigterm);
+});
+
+$settings['app_info']['api_id']   = 904912; //6;                                  // <== Use your own, or let MadelineProto ask you.
+$settings['app_info']['api_hash'] = '8208f08eefc502bedea8b5d437be898e'; // "eb06d4abfb49dc3eeb1aeb98ae0f581e"; // <== Use your own, or let MadelineProto ask you.
 $settings['logger']['logger_level'] = Logger::ERROR;
 $settings['logger']['logger'] = Logger::FILE_LOGGER;
 $settings['peer']['full_info_cache_time'] = 60;
@@ -73,17 +95,19 @@ $apiCreationStart = \hrtime(true);
 $MadelineProto = new API(SESSION_FILE, $settings);
 $apiCreationEnd = \hrtime(true);
 sanityCheck($MadelineProto, $apiCreationStart, $apiCreationEnd);
-$MadelineProto->async(true);
+//$MadelineProto->async(true);
 
 Shutdown::addCallback(
-    function () use ($MadelineProto) {
+    function () use ($MadelineProto, &$signal) {
         echo (PHP_EOL . 'Shutting down ....<br>' . PHP_EOL);
         $scrintEndTime = \hrtime(true);
         $stopReason = 'nullapi';
-        if ($MadelineProto) {
+        if ($signal !== null) {
+            $stopReason = $signal;
+        } elseif ($MadelineProto) {
             try {
                 $stopReason = $MadelineProto->getEventHandler()->getStopReason();
-                if ($stopReason === 'UNKNOWN') {
+                if (false && $stopReason === 'UNKNOWN') {
                     $error = \error_get_last();
                     $stopReason = isset($error) ? 'error' : $stopReason;
                 }
@@ -96,7 +120,6 @@ Shutdown::addCallback(
         Logger::log(toJSON($record), Logger::ERROR);
         $msg = SCRIPT_NAME . ' ' . SCRIPT_VERSION . " stopped due to $stopReason!  Execution duration: " . $duration;
         error_log($msg);
-        //Magic::shutdown(1);
     },
     'duration'
 );
@@ -129,13 +152,47 @@ $genLoop = new GenericLoop(
     'Repeating Loop'
 );
 
-//$msgIds = Tools::getVar($MadelineProto->API, 'msg_ids');
-//Logger::log(toJSON($msgIds), Logger::ERROR);
-
-$maxRecycles = 5;
-safeStartAndLoop($MadelineProto, \teleclient\base\EventHandler::class,  $genLoop, $maxRecycles);
+//safeStartAndLoop($MadelineProto, \teleclient\base\EventHandler::class,  $genLoop, MAX_RECYCLES);
+myStartAndLoop($MadelineProto, \teleclient\base\EventHandler::class,  [$genLoop], MAX_RECYCLES);
 
 exit(PHP_EOL . 'Update-Loop Exited' . PHP_EOL);
+
+function myStartAndLoop(API $mp, string $eventHandler, array $genLoops, int $maxRecycles): void
+{
+    $mp->async(true);
+    $mp->loop(function () use ($mp, $eventHandler, $genLoops) {
+        $errors = [];
+        while (true) {
+            try {
+                $started = false;
+                yield $mp->start();
+                yield $mp->setEventHandler($eventHandler);
+                foreach ($genLoops as $genLoop) {
+                    $genLoop->start(); // Do NOT use yield.
+                }
+                $started = true;
+                Tools::wait(yield from $mp->API->loop());
+                break;
+            } catch (\Throwable $e) {
+                $errors = [\time() => $errors[\time()] ?? 0];
+                $errors[\time()]++;
+                if ($errors[\time()] > 10 && (!$mp->inited() || !$started)) {
+                    yield $mp->logger->logger("More than 10 errors in a second and not inited, exiting!", Logger::FATAL_ERROR);
+                    break;
+                }
+                yield $mp->logger->logger((string) $e, Logger::FATAL_ERROR);
+                yield $mp->report("Surfaced: $e");
+            }
+        }
+    });
+}
+
+function getPeers(API $MadelineProto): array
+{
+    $msgIds = Tools::getVar($MadelineProto->API, 'msg_ids');
+    Logger::log(toJSON($msgIds), Logger::ERROR);
+    return $msgIds;
+}
 
 function makeDataDirectory($directory): string
 {
@@ -200,37 +257,6 @@ function sanityCheck(API $MadelineProto, int $apiCreationStart, int $apiCreation
         unset($variables);
     }
 }
-
-
-
-
-function startAndLoop(object $eh, string $eventHandler)
-{
-    $eh->async(true);
-    $errors = [];
-    while (true) {
-        try {
-            $started = false;
-            yield $eh->start();
-            yield $eh->setEventHandler($eventHandler);
-            $started = true;
-            Tools::wait(yield from $eh->API->loop());
-            break;
-        } catch (\Throwable $e) {
-            $errors = [\time() => $errors[\time()] ?? 0];
-            $errors[\time()]++;
-            if ($errors[\time()] > 10 && (!$eh->inited() || !$started)) {
-                // Display Errors
-                $eh->logger->logger("More than 10 errors in a second and not inited, exiting!", Logger::FATAL_ERROR);
-                break;
-            }
-            echo $e;
-            $eh->logger->logger((string) $e, Logger::FATAL_ERROR);
-            $eh->report("Surfaced: $e");
-        }
-    }
-}
-
 
 
 function startAndLoop_ORIG(object $eh, string $eventHandler): void

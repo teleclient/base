@@ -15,6 +15,7 @@ use teleclient\base\plugins\EmptyPlugin;
 use teleclient\base\plugins\BuiltinPlugin;
 use \danog\MadelineProto\Logger;
 use \danog\MadelineProto\Shutdown;
+use \danog\MadelineProto\APIWrapper;
 use \danog\MadelineProto\EventHandler as MadelineEventHandler;
 use function\Amp\File\{get, put, exists, getSize};
 
@@ -45,18 +46,20 @@ class EventHandler extends MadelineEventHandler
     private $processCommands = false;
     private $editMessage     = false;
 
-    public function __construct()
+    public function __construct(?APIWrapper $API)
     {
+        parent::__construct($API);
+
         $this->verifyPlugin  = new  VerifyPlugin($this);
         $this->emptyPlugin   = new   EmptyPlugin($this);
         $this->welcomePlugin = new   EmptyPlugin($this);
         $this->builtinPlugin = new BuiltinPlugin($this);
 
-        $this->startTime        = time();
-        $this->stopTime         = 0;
-        $this->stopReason       = 'UNKNOWN';
-        $this->processCommands  = false;
-        $this->officeId         = 1373853876;
+        $this->startTime       = time();
+        $this->stopTime        = 0;
+        $this->stopReason      = 'UNKNOWN';
+        $this->processCommands = false;
+        $this->officeId        = 1373853876;
     }
 
     public function __magic_sleep()
@@ -89,7 +92,6 @@ class EventHandler extends MadelineEventHandler
         $this->reportPeers = [$this->robotId];
 
         $this->processCommands  = false;
-        $this->updatesProcessed = 0;
         $this->editMessage      = false;
 
         $robotId    = $this->getRobotId();
@@ -107,24 +109,26 @@ class EventHandler extends MadelineEventHandler
         }
         yield $this->logger("$robotName: {officeId:$officeId,  robotId:$robotId,  admins: $adminsJson}", Logger::ERROR);
 
-        $maxRestart = 5;
-        $eh = $this;
-        //=============================================================
-        $restartsCount = yield checkTooManyRestarts($eh, 'data/startups.txt');
-        $nowstr = date('d H:i:s', $this->getStartTime());
-        if ($restartsCount > $maxRestart) {
-            $text = 'More than ' . $maxRestart . ' times restarted within a minute. Permanently shutting down ....';
-            yield $this->logger($text, Logger::ERROR);
-            yield $this->messages->sendMessage([
-                'peer'    => $this->robotId,
-                'message' => $text
-            ]);
-            if (Shutdown::removeCallback('restarter')) {
-                yield $this->logger('Self-Restarter disabled.', Logger::ERROR);
+        if (false) {
+            $maxRestart = 5;
+            $eh = $this;
+            //=============================================================
+            $restartsCount = yield checkTooManyRestarts($eh, 'data/startups.txt');
+            $nowstr = date('d H:i:s', $this->getStartTime());
+            if ($restartsCount > $maxRestart) {
+                $text = 'More than ' . $maxRestart . ' times restarted within a minute. Permanently shutting down ....';
+                yield $this->logger($text, Logger::ERROR);
+                yield $this->messages->sendMessage([
+                    'peer'    => $this->robotId,
+                    'message' => $text
+                ]);
+                if (Shutdown::removeCallback('restarter')) {
+                    yield $this->logger('Self-Restarter disabled.', Logger::ERROR);
+                }
+                yield $this->logger(SCRIPT_NAME . ' ' . SCRIPT_VERSION . ' on ' . hostname() . ' is stopping at ' . $nowstr, Logger::ERROR);
+                yield $this->stop();
+                return;
             }
-            yield $this->logger(SCRIPT_NAME . ' ' . SCRIPT_VERSION . ' on ' . hostname() . ' is stopping at ' . $nowstr, Logger::ERROR);
-            yield $this->stop();
-            return;
         }
 
         $session = '';
@@ -203,7 +207,7 @@ class EventHandler extends MadelineEventHandler
             $criteria = [
                 'from'    => $from,
                 'to'      => $to,
-                'process' => ($this->getProcessCommands ? 'true' : 'false'),
+                'process' => ($this->getProcessCommands() ? 'true' : 'false'),
                 ($verb ? 'action' : 'reaction') => mb_substr($msgText ?? '_NULL_', 0, 40)
             ];
             $this->logger(toJSON($criteria, false), Logger::ERROR);

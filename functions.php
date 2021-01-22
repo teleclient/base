@@ -478,60 +478,15 @@ function getURL(): ?string
     return $url;
 }
 
-/*
-function safeStartAndLoop(object $MadelineProto, string $eventHandler, GenericLoop $genLoop = null, int $maxRecycles = 10): void
+function safeStartAndLoop(API $MadelineProto, string $eventHandler, array $genLoops = [], int $maxRecycles = 10): void
 {
     $recycleTimes = [];
     while (true) {
         try {
-            $MadelineProto->loop(function () use ($MadelineProto, $eventHandler, $genLoop) {
-                yield $MadelineProto->start();
-                yield $MadelineProto->setEventHandler($eventHandler);
-                if ($genLoop !== null) {
-                    $genLoop->start(); // Do NOT use yield.
-                }
-
-                // Synchronously wait for the update loop to exit normally.
-                // The update loop exits either on ->stop or ->restart (which also calls ->stop).
-                Tools::wait(yield from $MadelineProto->API->loop());
-                yield $MadelineProto->logger("Update loop exited!");
-            });
-            sleep(5);
-            break;
-        } catch (\Throwable $e) {
-            try {
-                $MadelineProto->logger->logger((string) $e, Logger::FATAL_ERROR);
-                // quit recycling if more than $maxRecycles happened within the last minutes.
-                $now = time();
-                foreach ($recycleTimes as $index => $restartTime) {
-                    if ($restartTime > $now - 1 * 60) {
-                        break;
-                    }
-                    unset($recycleTimes[$index]);
-                }
-                if (count($recycleTimes) > $maxRecycles) {
-                    // quit for good
-                    Shutdown::removeCallback('restarter');
-                    Magic::shutdown(1);
-                    break;
-                }
-                $recycleTimes[] = $now;
-                $MadelineProto->report("Surfaced: $e");
-            } catch (\Throwable $e) {
-            }
-        }
-    };
-}
-*/
-function safeStartAndLoop(API $MadelineProto, string $eventHandler, GenericLoop $genLoop = null, int $maxRecycles = 10): void
-{
-    $recycleTimes = [];
-    while (true) {
-        try {
-            $MadelineProto->loop(function () use ($MadelineProto, $eventHandler, $genLoop) {
+            $MadelineProto->loop(function () use ($MadelineProto, $eventHandler, $genLoops) {
                 yield $MadelineProto->start();
                 yield $MadelineProto->setEventHandler($eventHandler);  //\teleclient\base\EventHandler::class
-                if ($genLoop !== null) {
+                foreach ($genLoops as $genLoop) {
                     $genLoop->start(); // Do NOT use yield.
                 }
 
@@ -566,34 +521,7 @@ function safeStartAndLoop(API $MadelineProto, string $eventHandler, GenericLoop 
         }
     };
 }
-/*
-function checkTooManyRestarts(object $eh): Generator
-{
-    $startups = [];
-    if (yield exists('data/startups.txt')) {
-        $startupsText = yield get('data/startups.txt');
-        $startups = explode('\n', $startupsText);
-    } else {
-        // Create the file
-    }
-    $startupsCount0 = count($startups);
 
-    $nowMilli = nowMilli();
-    $aMinuteAgo = $nowMilli - 60 * 1000;
-    foreach ($startups as $index => $startupstr) {
-        $startup = intval($startupstr);
-        if ($startup < $aMinuteAgo) {
-            unset($startups[$index]);
-        }
-    }
-    $startups[] = strval($nowMilli);
-    $startupsText = implode('\n', $startups);
-    yield put('data/startups.txt', $startupsText);
-    $restartsCount = count($startups);
-    yield $eh->logger("startups: {now:$nowMilli, count0:$startupsCount0, count1:$restartsCount}", Logger::ERROR);
-    return $restartsCount;
-}
-*/
 function checkTooManyRestarts(object $eh, string $startupFilename): \Generator
 {
     //$startupFilename = 'data/startups.txt';

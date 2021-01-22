@@ -12,7 +12,7 @@ use function\Amp\File\{get, put, exists, getSize};
 
 class BuiltinPlugin implements Plugin
 {
-    private $totalUpdates = 0;
+    private $totalUpdates;
 
     public function __construct()
     {
@@ -53,7 +53,6 @@ class BuiltinPlugin implements Plugin
         }
     }
 
-    //public function process(array $update, string $session, EventHandler $eh = null, array $vars = null): \Generator
     public function __invoke(array $update, string $session, EventHandler $eh = null, array $vars = null): \Generator
     {
         $this->totalUpdates += 1;
@@ -70,7 +69,7 @@ class BuiltinPlugin implements Plugin
         $officeId     = $eh->getOfficeId();
         $admins       = $eh->getAdmins();
         $startTime    = $eh->getStartTime();
-        $editMessage  = $eh->getEditMessage();
+        $editMessage  = $eh->getEditMessage(); // In reply=> true: edit the command;  false: reply to the command.
         $processCommands = $eh->getProcessCommands();
         $command      = $vars['command'];
 
@@ -179,7 +178,7 @@ class BuiltinPlugin implements Plugin
                     $status .= 'CPU: '         . getCpuUsage() . '<br>';
                     $status .= "Session Size: $sessionSize<br>";
                     $status .= 'Time: ' . date_default_timezone_get() . ' ' . date("d H:i:s") . '<br>';
-                    $status .= 'Updates Processed: ' . $eh->updatesProcessed . '<br>';
+                    $status .= 'Updates Processed: ' . $this->totalUpdates . '<br>';
                     $status .= 'Loop State: ' . ($eh->getLoopState() ? 'ON' : 'OFF') . '<br>';
                     $status .= 'Notification: ' . $notifStr . PHP_EOL;
                     $status .= 'Launch Method: ' . getLaunchMethod() . '<br>';
@@ -191,26 +190,25 @@ class BuiltinPlugin implements Plugin
                     yield $eh->logger("Command '/status' successfuly executed at " . date('d H:i:s!'), Logger::ERROR);
                     break;
                 case 'stats':
-                    $text = "Preparing statistics ....";
+                    $text   = "Preparing statistics ....";
                     $result = yield respond($eh, $peer, $msgId, $text, $editMessage);
+                    //$eh->echo(toJSON($result));
+                    $resMsgId = $editMessage ? $result[0]['message']['id'] : $result['updates'][0]['id'];
+                    unset($result);
                     $response = yield $eh->contacts->getContacts();
-                    $totalCount  = count($result['users']);
+                    $totalCount  = count($response['users']);
                     $mutualCount = 0;
                     foreach ($response['users'] as $user) {
                         $mutualCount += ($user['mutual_contact'] ?? false) ? 1 : 0;
                     }
-                    unset($result);
+                    unset($response);
                     $totalDialogsOut = 0;
                     $peerCounts   = [
                         'user' => 0, 'bot' => 0, 'basicgroup' => 0, 'supergroup' => 0, 'channel' => 0,
                         'chatForbidden' => 0, 'channelForbidden' => 0
                     ];
                     $params = [];
-                    //$params['limit']       =  50;
-                    //$params['max_dialogs'] = 200;
-                    //$params['pause_min']   =   2;
-                    //$params['pause_max']   =   6;
-                    yield visitAllDialogs/*visitDialogs*/(
+                    yield visitAllDialogs(
                         $eh,
                         $params,
                         function (
@@ -240,9 +238,7 @@ class BuiltinPlugin implements Plugin
                     $stats .= "Forbidden Supergroups or Channels: {$peerCounts['channelForbidden']}<br>";
                     $stats .= "Total Contacts: $totalCount<br>";
                     $stats .= "Mutual Contacts: $mutualCount";
-                    yield $eh->echo(toJSON($result) . PHP_EOL);
-                    $resMsgId = $result[0]['message']['id'];
-                    yield respond($eh, $peer, $resMsgId, $stats, false);
+                    yield respond($eh, $peer, $resMsgId, $stats, true);
                     break;
                 case 'loop':
                     $param = strtolower($params[0] ?? '');
@@ -315,16 +311,14 @@ class BuiltinPlugin implements Plugin
                     }
                     yield $eh->logger('The robot re-started by the owner.', Logger::ERROR);
                     $text = 'Restarting the robot ...';
-                    $result = yield respond($eh, $peer, $msgId, $text, $editMessage);
+                    yield respond($eh, $peer, $msgId, $text, $editMessage);
                     $eh->setStopReason('restart');
-                    $date = $result['date'];
                     $eh->restart();
                     break;
                 case 'logout':
                     yield $eh->logger('the robot is logged out by the owner.', Logger::ERROR);
                     $text = 'The robot is logging out. ...';
-                    $result = yield respond($eh, $peer, $msgId, $text, $editMessage);
-                    $date = $result['date'];
+                    yield respond($eh, $peer, $msgId, $text, $editMessage);
                     $eh->setStopReason('logout');
                     $eh->logout();
                 case 'stop':
