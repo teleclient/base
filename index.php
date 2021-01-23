@@ -99,12 +99,11 @@ $apiCreationStart = \hrtime(true);
 $MadelineProto = new API(SESSION_FILE, $settings);
 $apiCreationEnd = \hrtime(true);
 sanityCheck($MadelineProto, $apiCreationStart, $apiCreationEnd);
-//$MadelineProto->async(true);
 
 Shutdown::addCallback(
     function () use ($MadelineProto, &$signal) {
         echo (PHP_EOL . 'Shutting down ....<br>' . PHP_EOL);
-        $scrintEndTime = \hrtime(true);
+        $scriptEndTime = \hrtime(true);
         $stopReason = 'nullapi';
         if ($signal !== null) {
             $stopReason = $signal;
@@ -119,8 +118,9 @@ Shutdown::addCallback(
                 $stopReason = 'sigterm';
             }
         }
-        $duration = formatDuration($scrintEndTime - SCRIPT_START_TIME);
-        $record   = updateLaunchRecord(LAUNCHES_FILE, SCRIPT_START_TIME, $scrintEndTime,  $stopReason);
+        $duration = formatDuration($scriptEndTime - SCRIPT_START_TIME);
+        $peakMemory = \getPeakMemory();
+        $record   = updateLaunchRecord(LAUNCHES_FILE, SCRIPT_START_TIME, $scriptEndTime, $stopReason, $peakMemory);
         Logger::log(toJSON($record), Logger::ERROR);
         $msg = SCRIPT_NAME . ' ' . SCRIPT_VERSION . " stopped due to $stopReason!  Execution duration: " . $duration;
         error_log($msg);

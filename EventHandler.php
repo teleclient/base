@@ -72,7 +72,12 @@ class EventHandler extends MadelineEventHandler
 
     public function onStart(): \Generator
     {
-        yield $this->logger("Event Handler instantiated at " . date('d H:i:s', $this->getStartTime()) . "!", Logger::ERROR);
+        $launchMethod = \getLaunchMethod();
+        $peakMemory   = \getPeakMemory();
+        $launch = appendLaunchRecord(LAUNCHES_FILE, SCRIPT_START_TIME, $launchMethod, 'kill', $peakMemory);
+        yield $this->logger("Event Handler instantiated at " . date('d H:i:s', $this->getStartTime()) . "using $peakMemory!", Logger::ERROR);
+        yield $this->logger(toJSON($launch), Logger::ERROR);
+        unset($launch);
 
         $robot = yield $this->getSelf();
         if (!is_array($robot)) {
@@ -177,7 +182,7 @@ class EventHandler extends MadelineEventHandler
             yield $this->logger('Command-Processing engine started at ' . date('d H:i:s'), Logger::ERROR);
         }
         $params['new_execute']  = $this->getProcessCommands() ? 'true' : 'false';
-        yield $this->logger('params: ' . toJSON($params), Logger::ERROR);
+        //yield $this->logger('params: ' . toJSON($params), Logger::ERROR);
 
         // Recognize and log old or new commands.
         if ($verb && ($fromRobot && ($toRobot || $toOffice) || $fromAdmin && $toOffice) && $msgType === 'updateNewMessage') {
@@ -207,7 +212,7 @@ class EventHandler extends MadelineEventHandler
         if ($fromAdmin || $toOffice) {
             $text = "fromAdmin: $fromId, toOffice:" . ($toOffice ? 'true' : 'false');
             //yield $this->logger("fromId: $fromId, toOffice:" . ($toOffice ? 'true' : 'false'), Logger::ERROR);
-            yield $this->logger($text . ' ' . toJSON($update, false), Logger::ERROR);
+            yield $this->logger(toJSON($update, false), Logger::ERROR);
         }
 
         //yield $this->dispatchEvent($update, $session, $vars);

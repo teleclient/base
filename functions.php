@@ -363,26 +363,28 @@ function getPreviousLaunch(object $eh, string $fileName, int $scriptStartTime): 
     return $launch;
 }
 
-function appendLaunchRecord(string $fileName, int $scriptStartTime): array
+function appendLaunchRecord(string $fileName, int $scriptStartTime, string $launchMethod, string $stopReason, int $peakMemory): array
 {
     $record['time_start']    = $scriptStartTime;
     $record['time_end']      = 0;
-    $record['launch_method'] = \getLaunchMethod();
-    $record['stop_reason']   = 'kill';
-    $record['memory_start']  = \getPeakMemory();
+    $record['launch_method'] = $launchMethod; // \getLaunchMethod();
+    $record['stop_reason']   = $stopReason;
+    $record['memory_start']  = $peakMemory; // \getPeakMemory();
     $record['memory_end']    = 0;
 
     $line = "{$record['time_start']} {$record['time_end']} {$record['launch_method']} {$record['stop_reason']} {$record['memory_start']} {$record['memory_end']}";
     file_put_contents($fileName, "\n" . $line, FILE_APPEND | LOCK_EX);
+    //yield \Amp\File\put($fileName, "\n" . $line);
 
     return $record;
 }
 
-function updateLaunchRecord(string $fileName, int $scriptStartTime, int $scriptEndTime, string $stopReason): array
+function updateLaunchRecord(string $fileName, int $scriptStartTime, int $scriptEndTime, string $stopReason, int $peakMemory): array
 {
     $record = null;
     $new    = null;
-    $lines  = file($fileName);
+    $lines = file($fileName);
+    //$lines  = yield Amp\File\get($fileName);
     $key    = $scriptStartTime . ' ';
     $content = '';
     foreach ($lines as $line) {
@@ -393,7 +395,7 @@ function updateLaunchRecord(string $fileName, int $scriptStartTime, int $scriptE
             $record['launch_method'] = $items[2]; // \getLaunchMethod();
             $record['stop_reason']   = $stopReason;
             $record['memory_start']  = intval($items[4]);
-            $record['memory_end']    = \getPeakMemory();
+            $record['memory_end']    = $peakMemory; // \getPeakMemory();
             $new = "{$record['time_start']} {$record['time_end']} {$record['launch_method']} {$record['stop_reason']} {$record['memory_start']} {$record['memory_end']}";
             $content .= $new . "\n";
         } else {
@@ -404,19 +406,10 @@ function updateLaunchRecord(string $fileName, int $scriptStartTime, int $scriptE
         throw new \ErrorException("Launch record not found! key: $scriptStartTime");
     }
     file_put_contents($fileName, rtrim($content));
+    //yield Amp\File\put($fileName, rtrim($content));
     return $record;
 }
 
-/*
-function getLaunchMethod2(): string
-{
-    if (PHP_OS_FAMILY === "Windows") {
-        return PHP_SAPI === 'cli' ? (isset($_SERVER['TERM']) ? 'manual' : 'cron') : 'web';
-    } elseif (PHP_OS_FAMILY === "Linux") {
-        return PHP_SAPI === 'cli' ? (isset($_SERVER['TERM']) ? 'manual' : 'cron') : 'web';
-    }
-}
-*/
 /*
   Interface, LaunchMethod
 1) Web, Manual
@@ -477,52 +470,6 @@ function getURL(): ?string
     }
     return $url;
 }
-
-/*
-function safeStartAndLoop(API $MadelineProto, string $eventHandler, array $genLoops = [], int $maxRecycles = 10): void
-{
-    $recycleTimes = [];
-    while (true) {
-        try {
-            $MadelineProto->loop(function () use ($MadelineProto, $eventHandler, $genLoops) {
-                yield $MadelineProto->start();
-                yield $MadelineProto->setEventHandler($eventHandler);  //\teleclient\base\EventHandler::class
-                foreach ($genLoops as $genLoop) {
-                    $genLoop->start(); // Do NOT use yield.
-                }
-
-                // Synchronously wait for the update loop to exit normally.
-                // The update loop exits either on ->stop or ->restart (which also calls ->stop).
-                Tools::wait(yield from $MadelineProto->API->loop());
-                yield $MadelineProto->logger("Update loop exited!");
-            });
-            sleep(5);
-            break;
-        } catch (\Throwable $e) {
-            try {
-                $MadelineProto->logger->logger((string) $e, Logger::FATAL_ERROR);
-                // quit recycling if more than $maxRecycles happened within the last minutes.
-                $now = time();
-                foreach ($recycleTimes as $index => $restartTime) {
-                    if ($restartTime > $now - 1 * 60) {
-                        break;
-                    }
-                    unset($recycleTimes[$index]);
-                }
-                if (count($recycleTimes) > $maxRecycles) {
-                    // quit for good
-                    Shutdown::removeCallback('restarter');
-                    Magic::shutdown(1);
-                    break;
-                }
-                $recycleTimes[] = $now;
-                $MadelineProto->report("Surfaced: " . $e->getMessage());
-            } catch (\Throwable $e) {
-            }
-        }
-    };
-}
-*/
 
 function checkTooManyRestarts(object $eh, string $startupFilename): \Generator
 {
@@ -956,74 +903,3 @@ function sanityCheck(API $MadelineProto, int $apiCreationStart, int $apiCreation
         unset($variables);
     }
 }
-
-
-
-/*
-function newVisitor(object $eh, int $fromId, array $message,  int $messageLimit): \Generator
-{
-    if ($message === null) {
-        yield $eh->logger("Last Message: NONE", Logger::ERROR);
-        return false;
-    }
-    $peerDialogs =  yield $eh->messages->getPeerDialogs([
-        'peers' => [$fromId]
-    ]);
-    $dialog = $peerDialogs['dialogs'][0] ?? null;
-    if ($dialog) {
-        $inboxMaxId    = $dialog['read_inbox_max_id'];     // int  Position up to which all incoming messages are read.
-        $outboxMaxId   = $dialog['read_outbox_max_id'];    // int  Position up to which all outgoing messages are read.
-        $unreadCount   = $dialog['unread_count'];          // int  Number of unread messages.
-        $mentionsCount = $dialog['unread_mentions_count']; // int  Number of unread mentions.
-        if ($inboxMaxId === 0 || $outboxMaxId === 0 || $unreadCount > 0 || $mentionsCount > 0) {
-            yield $eh->logger("New Visitor: " . toJSON($dialog), Logger::ERROR);
-            return true;
-        }
-    }
-    return false;
-}
-function verifyOldOrNew(object $eh, int $userId, array $dialog, array $message, int $messageLimit, int $lastStopTime): Generator
-{
-    if ($message === null) {
-        yield $eh->logger("Last Message: NONE", Logger::ERROR);
-        return false;
-    }
-
-    return false;
-    //$user = yield $mp->users->getUsers(['id' => [$userId]]);
-    //yield $mp->logger("The User: " . toJSON($user), Logger::ERROR);
-    //yield $mp->logger("Last Message: " . toJSON($message), Logger::ERROR);
-    if (($message['from_id']) !== $eh->getRobotId()) {
-        $res = yield $eh->messages->getHistory([
-            'peer'        => $message,
-            'limit'       => $messageLimit,
-            'offset_id'   => 0,
-            'offset_date' => 0,
-            'add_offset'  => 0,
-            'max_id'      => 0,
-            'min_id'      => 0,
-        ]);
-        $messages = $res['messages'];
-        $chats    = $res['chats'];
-        $users    = $res['users'];
-
-        $isNew = true;
-        foreach ($res['messages'] as $idx => $msg) {
-            if ($msg['from_id'] === $eh->getRobotId()) {
-                $isNew = false;
-                break;
-            }
-        }
-        yield $eh->logger("idx: '$idx'   " . ($isNew ? 'NEW' : "OLD"), Logger::ERROR);
-        $mostRecent = \max($mp->startTime - 60 * 60 * 24 * 7, $lastStopTime);
-        if ($message['date'] > $mostRecent) {
-            if ($isNew) {
-                //yield $mp->logger("New User: " . toJSON($message), Logger::ERROR);
-            } else {
-                //yield $mp->logger("Old User: " . toJSON($message), Logger::ERROR);
-            }
-        }
-    }
-    return $isNew;
-}
-*/
