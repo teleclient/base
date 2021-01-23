@@ -162,15 +162,15 @@ class EventHandler extends MadelineEventHandler
         $fromAdmin = in_array($fromId, $admins);
 
         // Start the Command Processing Engine based on the date of a received command
-        $params['msg_date']   = date('d H:i:s', $msgDate);
-        $params['start_time']   = date('d H:i:s', $startTime);
-        $params['current_time'] = date('d H:i:s');
         $params['verb']         = $verb ? $msgText : '_NONE"';
-        $params['msg_type']     = $msgType;
         $params['from_robot']   = $fromRobot ? 'true' : 'false';
         $params['from_admin']   = $fromAdmin ? 'true' : 'false';
         $params['to_robot']     = $toRobot ?   'true' : 'false';
         $params['to_office']    = $toOffice ?  'true' : 'false';
+        $params['msg_type']     = $msgType;
+        $params['msg_date']     = date('d H:i:s', $msgDate);
+        $params['start_time']   = date('d H:i:s', $startTime);
+        $params['current_time'] = date('d H:i:s');
         $params['old_execute']  = $this->getProcessCommands() ? 'true' : 'false';
         if (
             $verb && !$processCommands &&
@@ -185,15 +185,20 @@ class EventHandler extends MadelineEventHandler
         //yield $this->logger('params: ' . toJSON($params), Logger::ERROR);
 
         // Recognize and log old or new commands.
-        if ($verb && ($fromRobot && ($toRobot || $toOffice) || $fromAdmin && $toOffice) && $msgType === 'updateNewMessage') {
-            $start = date('H:i:s', $startTime);
-            $now   = date('H:i:s');
-            $time  = date('H:i:s', $msgDate);
-            $type  = $msgIsNew  ? 'New' : 'Old';
-            $age   = $msgIsNew  ? '' : ", age:" . formatDuration(($startTime - $msgDate) * 1000000000);
-            $from  = $fromRobot ? 'robot' : $fromId;
-            $to    = $toRobot   ? 'robot' : 'office';
-            $text  = "$type Command:{verb:'$msgText', time:$time, now:$now, from:$from, to:$to, start:$start$age}";
+        if (
+            $verb && $msgType === 'updateNewMessage' &&
+            ($fromRobot && ($toRobot || $toOffice) || $fromAdmin && $toOffice)
+        ) {
+            $type   = $msgIsNew  ? 'New' : 'Old';
+            $from   = $fromRobot ? 'robot' : $fromId;
+            $to     = $toRobot   ? 'robot' : 'office';
+            $exec   = $processCommands ? 'true' : 'false';
+            $age    = formatDuration(\abs($startTime - $msgDate) * 1000000000);
+            $age    = $startTime > $msgDate ? $age : -$age;
+            $start  = date('H:i:s', $startTime);
+            $now    = date('H:i:s');
+            $issued = date('H:i:s', $msgDate);
+            $text   = "$type Command:{verb:'$msgText', from:$from, to:$to, exec:$exec, age:$age, issued:$issued, start:$start, now:$now}";
             yield $this->logger($text, Logger::ERROR);
         }
 
