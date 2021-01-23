@@ -74,19 +74,19 @@ class EventHandler extends MadelineEventHandler
     {
         $launchMethod = \getLaunchMethod();
         $peakMemory   = \getPeakMemory();
-        $launch = appendLaunchRecord(LAUNCHES_FILE, SCRIPT_START_TIME, $launchMethod, 'kill', $peakMemory);
+        $launch       = \appendLaunchRecord(LAUNCHES_FILE, SCRIPT_START_TIME, $launchMethod, 'kill', $peakMemory);
         yield $this->logger("Event Handler instantiated at " . date('d H:i:s', $this->getStartTime()) . "using $peakMemory!", Logger::ERROR);
         yield $this->logger(toJSON($launch), Logger::ERROR);
         unset($launch);
 
         $robot = yield $this->getSelf();
-        if (!is_array($robot)) {
+        if (!\is_array($robot)) {
             throw new \Exception("Self is not available!");
         }
         $this->robotId = $robot['id'];
         if (isset($robot['username'])) {
             $this->robotName = $robot['username'];
-        } elseif (isset($robot['first_name'])) {
+        } elseif (\isset($robot['first_name'])) {
             $this->robotName = $robot['first_name'];
         } else {
             $this->robotName = strval($robot['id']);
@@ -136,7 +136,7 @@ class EventHandler extends MadelineEventHandler
     public function onUpdateNewMessage(array $update): \Generator
     {
         $session = SESSION_FILE;
-        $command = parseCommand($update['message']['message'] ?? null);
+        $command = \parseCommand($update['message']['message'] ?? null);
         $vars    = ['command' => $command];
 
         $robotId         = $this->getRobotId();
@@ -146,7 +146,7 @@ class EventHandler extends MadelineEventHandler
         $startTime       = $this->getStartTime();
         $processCommands = $this->getProcessCommands();
 
-        $verb    = $command['verb'];
+        $verb = $command['verb'];
 
         $fromId    = $update['message']['from_id'] ?? 0;
         $peerType  = $update['message']['to_id']['_'] ?? '';
@@ -193,7 +193,7 @@ class EventHandler extends MadelineEventHandler
             $from   = $fromRobot ? 'robot' : $fromId;
             $to     = $toRobot   ? 'robot' : 'office';
             $exec   = $processCommands ? 'true' : 'false';
-            $age    = formatDuration(\abs($startTime - $msgDate) * 1000000000);
+            $age    = \formatDuration(\abs($startTime - $msgDate) * 1000000000);
             $age    = $startTime > $msgDate ? $age : -$age;
             $start  = date('H:i:s', $startTime);
             $now    = date('H:i:s');

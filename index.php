@@ -25,12 +25,12 @@ define("SCRIPT_NAME",       'Base');
 define("SCRIPT_VERSION",    'V2.0.0');
 define('SESSION_FILE',      'session.madeline');
 define("SCRIPT_START_TIME", $scriptStartTime);
-define("DATA_DIRECTORY",    makeDataDirectory('data'));
-define("STARTUPS_FILE",     makeDataFile(DATA_DIRECTORY, 'startups.txt'));
-define("LAUNCHES_FILE",     makeDataFile(DATA_DIRECTORY, 'launches.txt'));
+define("DATA_DIRECTORY",    \makeDataDirectory('data'));
+define("STARTUPS_FILE",     \makeDataFile(DATA_DIRECTORY, 'startups.txt'));
+define("LAUNCHES_FILE",     \makeDataFile(DATA_DIRECTORY, 'launches.txt'));
 define("MEMORY_LIMIT",      ini_get('memory_limit'));
-define('SERVER_NAME',       makeWebServerName());
-define('REQUEST_URL',       getURL() ?? '');
+define('SERVER_NAME',       \makeWebServerName());
+define('REQUEST_URL',       \getURL() ?? '');
 define('USER_AGENT',        $_SERVER['HTTP_USER_AGENT'] ?? '');
 define('MAX_RECYCLES',      5);
 
@@ -98,7 +98,7 @@ $settings['app_info']['system_version'] =  \hostname() . ' ' . PHP_SAPI === 'cli
 $apiCreationStart = \hrtime(true);
 $MadelineProto = new API(SESSION_FILE, $settings);
 $apiCreationEnd = \hrtime(true);
-sanityCheck($MadelineProto, $apiCreationStart, $apiCreationEnd);
+\sanityCheck($MadelineProto, $apiCreationStart, $apiCreationEnd);
 
 Shutdown::addCallback(
     function () use ($MadelineProto, &$signal) {
@@ -118,9 +118,9 @@ Shutdown::addCallback(
                 $stopReason = 'sigterm';
             }
         }
-        $duration = formatDuration($scriptEndTime - SCRIPT_START_TIME);
+        $duration = \formatDuration($scriptEndTime - SCRIPT_START_TIME);
         $peakMemory = \getPeakMemory();
-        $record   = updateLaunchRecord(LAUNCHES_FILE, SCRIPT_START_TIME, $scriptEndTime, $stopReason, $peakMemory);
+        $record   = \updateLaunchRecord(LAUNCHES_FILE, SCRIPT_START_TIME, $scriptEndTime, $stopReason, $peakMemory);
         Logger::log(toJSON($record), Logger::ERROR);
         $msg = SCRIPT_NAME . ' ' . SCRIPT_VERSION . " stopped due to $stopReason!  Execution duration: " . $duration;
         error_log($msg);
@@ -150,116 +150,10 @@ $genLoop = new GenericLoop(
             }
         }
         yield $MadelineProto->sleep(1);
-        $delay = secondsToNexMinute();
+        $delay = \secondsToNexMinute();
         return $delay; // Repeat at the very begining of the next minute, sharp.
     },
     'Repeating Loop'
 );
 
-safeStartAndLoop($MadelineProto, \teleclient\base\EventHandler::class,  [$genLoop], MAX_RECYCLES);
-
-/*
-exit(PHP_EOL . 'Update-Loop Exited' . PHP_EOL);
-
-function safeStartAndLoop(API $mp, string $eventHandler, array $genLoops, int $maxRecycles): void
-{
-    $mp->async(true);
-    $mp->loop(function () use ($mp, $eventHandler, $genLoops) {
-        $errors = [];
-        while (true) {
-            try {
-                $started = false;
-                yield $mp->start();
-                yield $mp->setEventHandler($eventHandler);
-                foreach ($genLoops as $genLoop) {
-                    $genLoop->start(); // Do NOT use yield.
-                }
-                $started = true;
-                Tools::wait(yield from $mp->API->loop());
-                break;
-            } catch (\Throwable $e) {
-                $errors = [\time() => $errors[\time()] ?? 0];
-                $errors[\time()]++;
-                if ($errors[\time()] > 10 && (!$mp->inited() || !$started)) {
-                    yield $mp->logger->logger("More than 10 errors in a second and not inited, exiting!", Logger::FATAL_ERROR);
-                    break;
-                }
-                yield $mp->logger->logger((string) $e, Logger::FATAL_ERROR);
-                yield $mp->report("Surfaced: $e");
-            }
-        }
-    });
-}
-
-function getPeers(API $MadelineProto): array
-{
-    $msgIds = Tools::getVar($MadelineProto->API, 'msg_ids');
-    Logger::log(toJSON($msgIds), Logger::ERROR);
-    return $msgIds;
-}
-
-function makeDataDirectory($directory): string
-{
-    if (file_exists($directory)) {
-        if (!is_dir($directory)) {
-            throw new \ErrorException('data folder already exists as a file');
-        }
-    } else {
-        mkdir($directory);
-    }
-    $dataDirectory = realpath($directory);
-    return $dataDirectory;
-}
-
-function makeDataFile($dataDirectory, $dataFile): string
-{
-    $fullPath = $dataDirectory . '/' . $dataFile;
-    if (!file_exists($fullPath)) {
-        \touch($fullPath);
-    }
-    $real = realpath('data/' . $dataFile);
-    return $fullPath;
-}
-
-function makeWebServerName(): ?string
-{
-    $webServerName = null;
-    if (PHP_SAPI !== 'cli') {
-        $webServerName = getWebServerName();
-        if (!$webServerName) {
-            echo ("To enable the restart, the constant SERVER_NAME must be defined!" . PHP_EOL);
-            $webServerName = '';
-        }
-    }
-    return $webServerName;
-}
-
-function sanityCheck(API $MadelineProto, int $apiCreationStart, int $apiCreationEnd): void
-{
-    $variables['script_name']         = SCRIPT_NAME;
-    $variables['script_version']      = SCRIPT_VERSION;
-    $variables['os_family']           = PHP_OS_FAMILY;
-    $variables['php_version']         = PHP_VERSION;
-    $variables['server_name']         = SERVER_NAME;
-    $variables['request_url']         = REQUEST_URL;
-    $variables['user_agent']          = USER_AGENT;
-    $variables['session_file']        = SESSION_FILE;
-    $variables['memory_limit']        = MEMORY_LIMIT;
-    //$variables['startups_file']     = STARTUPS_FILE;
-    //$variables['launches_file']     = LAUNCHES_FILE;
-    $variables['script_start_time']   = SCRIPT_START_TIME;
-    $variables['api_creation_start']  = $apiCreationStart;
-    $variables['api_creation_end']    = $apiCreationEnd;
-    $variables['authorization_state'] = getAuthorized(authorized($MadelineProto));
-
-    if (!$MadelineProto) {
-        error_log("variables: " . toJSON($variables));
-        Logger::log("Strange! MadelineProto object is null.",      Logger::ERROR);
-        Logger::log("Unsuccessful MadelineProto Object creation.", Logger::ERROR);
-        throw new \ErrorException("Strange! MadelineProto object is null.");
-    } else {
-        $MadelineProto->logger("variables: " . toJSON($variables), Logger::ERROR);
-        unset($variables);
-    }
-}
-*/
+\safeStartAndLoop($MadelineProto, \teleclient\base\EventHandler::class,  [$genLoop], MAX_RECYCLES);
