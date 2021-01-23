@@ -91,8 +91,8 @@ class EventHandler extends MadelineEventHandler
         $this->admins      = [$this->robotId];
         $this->reportPeers = [$this->robotId];
 
-        $this->processCommands  = false;
-        $this->editMessage      = false;
+        $this->processCommands = false;
+        $this->editMessage     = false;
 
         $robotId    = $this->getRobotId();
         $robotName  = $this->getRobotName();
@@ -109,31 +109,9 @@ class EventHandler extends MadelineEventHandler
         }
         yield $this->logger("$robotName: {officeId:$officeId,  robotId:$robotId,  admins: $adminsJson}", Logger::ERROR);
 
-        if (false) {
-            $maxRestart = 5;
-            $eh = $this;
-            //=============================================================
-            $restartsCount = yield checkTooManyRestarts($eh, 'data/startups.txt');
-            $nowstr = date('d H:i:s', $this->getStartTime());
-            if ($restartsCount > $maxRestart) {
-                $text = 'More than ' . $maxRestart . ' times restarted within a minute. Permanently shutting down ....';
-                yield $this->logger($text, Logger::ERROR);
-                yield $this->messages->sendMessage([
-                    'peer'    => $this->robotId,
-                    'message' => $text
-                ]);
-                if (Shutdown::removeCallback('restarter')) {
-                    yield $this->logger('Self-Restarter disabled.', Logger::ERROR);
-                }
-                yield $this->logger(SCRIPT_NAME . ' ' . SCRIPT_VERSION . ' on ' . hostname() . ' is stopping at ' . $nowstr, Logger::ERROR);
-                yield $this->stop();
-                return;
-            }
-        }
-
         $session = '';
-        yield $this->verifyPlugin->onStart($session, $this);
-        yield $this->emptyPlugin->onStart($session, $this);
+        yield  $this->verifyPlugin->onStart($session, $this);
+        yield   $this->emptyPlugin->onStart($session, $this);
         yield $this->welcomePlugin->onStart($session, $this);
         yield $this->builtinPlugin->onStart($session, $this);
     }
@@ -156,46 +134,60 @@ class EventHandler extends MadelineEventHandler
         $command = parseCommand($update['message']['message'] ?? null);
         $vars    = ['command' => $command];
 
-        $robotId      = $this->getRobotId();
-        $robotName    = $this->getRobotName();
-        $officeId     = $this->getOfficeId();
-        $admins       = $this->getAdmins();
-        $startTime    = $this->getStartTime();
+        $robotId         = $this->getRobotId();
+        $robotName       = $this->getRobotName();
+        $officeId        = $this->getOfficeId();
+        $admins          = $this->getAdmins();
+        $startTime       = $this->getStartTime();
+        $processCommands = $this->getProcessCommands();
 
         $verb    = $command['verb'];
 
-        $msgIsNew  = $update['message']['date'] > $this->getStartTime();
         $fromId    = $update['message']['from_id'] ?? 0;
         $peerType  = $update['message']['to_id']['_'] ?? '';
         $peer      = $update['message']['to_id'] ?? null;
         $msgType   = $update['_'];
         $msgDate   = $update['message']['date']    ?? null;
         $msgText   = $update['message']['message'] ?? null;
+        $msgIsNew  = $msgDate > $startTime;
 
-        $fromRobot = $fromId   === $this->getRobotId();
-        $toRobot   = $peerType === 'peerUser' && $peer['user_id'] === $robotId;
+        $fromRobot = $fromId   === $robotId;
+        $toRobot   = $peerType === 'peerUser'    && $peer['user_id']    === $robotId;
         $toOffice  = $peerType === 'peerChannel' && $peer['channel_id'] === $officeId;
         $fromAdmin = in_array($fromId, $admins);
 
         // Start the Command Processing Engine based on the date of a received command
+        $params['msg_date']   = date('d H:i:s', $msgDate);
+        $params['start_time']   = date('d H:i:s', $startTime);
+        $params['current_time'] = date('d H:i:s');
+        $params['verb']         = $verb ? $msgText : '_NONE"';
+        $params['msg_type']     = $msgType;
+        $params['from_robot']   = $fromRobot ? 'true' : 'false';
+        $params['from_admin']   = $fromAdmin ? 'true' : 'false';
+        $params['to_robot']     = $toRobot ?   'true' : 'false';
+        $params['to_office']    = $toOffice ?  'true' : 'false';
+        $params['old_execute']  = $this->getProcessCommands() ? 'true' : 'false';
         if (
-            $verb && !$this->getProcessCommands() &&
+            $verb && !$processCommands &&
             $msgIsNew && $msgType === 'updateNewMessage' &&
             ($fromRobot && ($toRobot || $toOffice) || $fromAdmin && $toOffice)
         ) {
             $this->processCommands = true;
+            $processCommands = $this->getProcessCommands();
             yield $this->logger('Command-Processing engine started at ' . date('d H:i:s'), Logger::ERROR);
         }
+        $params['new_execute']  = $this->getProcessCommands() ? 'true' : 'false';
+        yield $this->logger('params: ' . toJSON($params), Logger::ERROR);
 
         // Recognize and log old or new commands.
         if ($verb && ($fromRobot && ($toRobot || $toOffice) || $fromAdmin && $toOffice) && $msgType === 'updateNewMessage') {
-            $start = date('H:i:s', $this->getStartTime());
+            $start = date('H:i:s', $startTime);
             $now   = date('H:i:s');
             $time  = date('H:i:s', $msgDate);
-            $type  = $msgIsNew ? 'New' : 'Old';
-            $age   = $msgIsNew ? '' : ", age:" . formatDuration(($this->getStartTime() - $msgDate) * 1000000000);
+            $type  = $msgIsNew  ? 'New' : 'Old';
+            $age   = $msgIsNew  ? '' : ", age:" . formatDuration(($startTime - $msgDate) * 1000000000);
             $from  = $fromRobot ? 'robot' : $fromId;
-            $to    = $toRobot ? 'robot' : 'office';
+            $to    = $toRobot   ? 'robot' : 'office';
             $text  = "$type Command:{verb:'$msgText', time:$time, now:$now, from:$from, to:$to, start:$start$age}";
             yield $this->logger($text, Logger::ERROR);
         }
@@ -213,9 +205,9 @@ class EventHandler extends MadelineEventHandler
             $this->logger(toJSON($criteria, false), Logger::ERROR);
         }
         if ($fromAdmin || $toOffice) {
-            $text = "fromId: $fromId, toOffice:" . ($toOffice ? 'true' : 'false');
+            $text = "fromAdmin: $fromId, toOffice:" . ($toOffice ? 'true' : 'false');
             //yield $this->logger("fromId: $fromId, toOffice:" . ($toOffice ? 'true' : 'false'), Logger::ERROR);
-            yield $this->logger($text . ' ' . toJSON($update), Logger::ERROR);
+            yield $this->logger($text . ' ' . toJSON($update, false), Logger::ERROR);
         }
 
         //yield $this->dispatchEvent($update, $session, $vars);

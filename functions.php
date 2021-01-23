@@ -368,7 +368,7 @@ function appendLaunchRecord(string $fileName, int $scriptStartTime): array
     $record['time_start']    = $scriptStartTime;
     $record['time_end']      = 0;
     $record['launch_method'] = \getLaunchMethod();
-    $record['stop_reason']   = 'UNKNOWN';
+    $record['stop_reason']   = 'kill';
     $record['memory_start']  = \getPeakMemory();
     $record['memory_end']    = 0;
 
@@ -401,7 +401,7 @@ function updateLaunchRecord(string $fileName, int $scriptStartTime, int $scriptE
         }
     }
     if ($new === null) {
-        throw new \ErrorException('Launch record not found!');
+        throw new \ErrorException("Launch record not found! key: $scriptStartTime");
     }
     file_put_contents($fileName, rtrim($content));
     return $record;
@@ -471,13 +471,14 @@ function getURL(): ?string
 {
     //$_SERVER['REQUEST_URI'] => '/base/?MadelineSelfRestart=1755455420394943907'
     $url = null;
-    if (PHP_SAPI === 'cli') {
+    if (PHP_SAPI !== 'cli') {
         $url = (isset($_SERVER['HTTPS']) ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[REQUEST_URI]";
         $url = htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
     }
     return $url;
 }
 
+/*
 function safeStartAndLoop(API $MadelineProto, string $eventHandler, array $genLoops = [], int $maxRecycles = 10): void
 {
     $recycleTimes = [];
@@ -521,6 +522,7 @@ function safeStartAndLoop(API $MadelineProto, string $eventHandler, array $genLo
         }
     };
 }
+*/
 
 function checkTooManyRestarts(object $eh, string $startupFilename): \Generator
 {
@@ -851,6 +853,110 @@ function respond(object $eh, array $peer, int $msgId, string $text, $editMessage
     }
     return $result;
 }
+
+
+function safeStartAndLoop(API $mp, string $eventHandler, array $genLoops, int $maxRecycles): void
+{
+    $mp->async(true);
+    $mp->loop(function () use ($mp, $eventHandler, $genLoops) {
+        $errors = [];
+        while (true) {
+            try {
+                $started = false;
+                yield $mp->start();
+                yield $mp->setEventHandler($eventHandler);
+                foreach ($genLoops as $genLoop) {
+                    $genLoop->start(); // Do NOT use yield.
+                }
+                $started = true;
+                Tools::wait(yield from $mp->API->loop());
+                break;
+            } catch (\Throwable $e) {
+                $errors = [\time() => $errors[\time()] ?? 0];
+                $errors[\time()]++;
+                if ($errors[\time()] > 10 && (!$mp->inited() || !$started)) {
+                    yield $mp->logger->logger("More than 10 errors in a second and not inited, exiting!", Logger::FATAL_ERROR);
+                    break;
+                }
+                yield $mp->logger->logger((string) $e, Logger::FATAL_ERROR);
+                yield $mp->report("Surfaced: $e");
+            }
+        }
+    });
+}
+
+function getPeers(API $MadelineProto): array
+{
+    $msgIds = Tools::getVar($MadelineProto->API, 'msg_ids');
+    Logger::log(toJSON($msgIds), Logger::ERROR);
+    return $msgIds;
+}
+
+function makeDataDirectory($directory): string
+{
+    if (file_exists($directory)) {
+        if (!is_dir($directory)) {
+            throw new \ErrorException('data folder already exists as a file');
+        }
+    } else {
+        mkdir($directory);
+    }
+    $dataDirectory = realpath($directory);
+    return $dataDirectory;
+}
+
+function makeDataFile($dataDirectory, $dataFile): string
+{
+    $fullPath = $dataDirectory . '/' . $dataFile;
+    if (!file_exists($fullPath)) {
+        \touch($fullPath);
+    }
+    $real = realpath('data/' . $dataFile);
+    return $fullPath;
+}
+
+function makeWebServerName(): ?string
+{
+    $webServerName = null;
+    if (PHP_SAPI !== 'cli') {
+        $webServerName = getWebServerName();
+        if (!$webServerName) {
+            echo ("To enable the restart, the constant SERVER_NAME must be defined!" . PHP_EOL);
+            $webServerName = '';
+        }
+    }
+    return $webServerName;
+}
+
+function sanityCheck(API $MadelineProto, int $apiCreationStart, int $apiCreationEnd): void
+{
+    $variables['script_name']         = SCRIPT_NAME;
+    $variables['script_version']      = SCRIPT_VERSION;
+    $variables['os_family']           = PHP_OS_FAMILY;
+    $variables['php_version']         = PHP_VERSION;
+    $variables['server_name']         = SERVER_NAME;
+    $variables['request_url']         = REQUEST_URL;
+    $variables['user_agent']          = USER_AGENT;
+    $variables['session_file']        = SESSION_FILE;
+    $variables['memory_limit']        = MEMORY_LIMIT;
+    //$variables['startups_file']     = STARTUPS_FILE;
+    //$variables['launches_file']     = LAUNCHES_FILE;
+    $variables['script_start_time']   = SCRIPT_START_TIME;
+    $variables['api_creation_start']  = $apiCreationStart;
+    $variables['api_creation_end']    = $apiCreationEnd;
+    $variables['authorization_state'] = getAuthorized(authorized($MadelineProto));
+
+    if (!$MadelineProto) {
+        error_log("variables: " . toJSON($variables));
+        Logger::log("Strange! MadelineProto object is null.",      Logger::ERROR);
+        Logger::log("Unsuccessful MadelineProto Object creation.", Logger::ERROR);
+        throw new \ErrorException("Strange! MadelineProto object is null.");
+    } else {
+        $MadelineProto->logger("variables: " . toJSON($variables), Logger::ERROR);
+        unset($variables);
+    }
+}
+
 
 
 /*
