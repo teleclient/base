@@ -194,7 +194,7 @@ class EventHandler extends MadelineEventHandler
             $to     = $toRobot   ? 'robot' : 'office';
             $exec   = $processCommands ? 'true' : 'false';
             $age    = \formatDuration(\abs($startTime - $msgDate) * 1000000000);
-            $age    = $startTime > $msgDate ? $age : -$age;
+            $age    = $startTime > $msgDate ? $age : (-1 * $age);
             $start  = date('H:i:s', $startTime);
             $now    = date('H:i:s');
             $issued = date('H:i:s', $msgDate);
