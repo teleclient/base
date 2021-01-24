@@ -86,7 +86,7 @@ class EventHandler extends MadelineEventHandler
         $this->robotId = $robot['id'];
         if (isset($robot['username'])) {
             $this->robotName = $robot['username'];
-        } elseif (\isset($robot['first_name'])) {
+        } elseif (isset($robot['first_name'])) {
             $this->robotName = $robot['first_name'];
         } else {
             $this->robotName = strval($robot['id']);
