@@ -330,7 +330,7 @@ function setWebServerName(string $serverName): void
     $_SERVER['SERVER_NAME'] = $serverName;
 }
 
-function getPreviousLaunch(object $eh, string $fileName, int $scriptStartTime): \Generator
+function getPreviousLaunch(object $eh, string $fileName, float $scriptStartTime): \Generator
 {
     $content = yield get($fileName);
     if ($content === '') {
@@ -363,7 +363,7 @@ function getPreviousLaunch(object $eh, string $fileName, int $scriptStartTime): 
     return $launch;
 }
 
-function appendLaunchRecord(string $fileName, int $scriptStartTime, string $launchMethod, string $stopReason, int $peakMemory): array
+function appendLaunchRecord(string $fileName, float $scriptStartTime, string $launchMethod, string $stopReason, int $peakMemory): array
 {
     $record['time_start']    = $scriptStartTime;
     $record['time_end']      = 0;
@@ -379,7 +379,7 @@ function appendLaunchRecord(string $fileName, int $scriptStartTime, string $laun
     return $record;
 }
 
-function updateLaunchRecord(string $fileName, int $scriptStartTime, int $scriptEndTime, string $stopReason, int $peakMemory): array
+function updateLaunchRecord(string $fileName, float $scriptStartTime, float $scriptEndTime, string $stopReason, int $peakMemory): array
 {
     $record = null;
     $new    = null;
@@ -471,7 +471,7 @@ function getURL(): ?string
     return $url;
 }
 
-function checkTooManyRestarts(object $eh, string $startupFilename): \Generator
+function checkTooManyRestartsAsync(object $eh, string $startupFilename): \Generator
 {
     //$startupFilename = 'data/startups.txt';
     $startups = [];
@@ -496,6 +496,31 @@ function checkTooManyRestarts(object $eh, string $startupFilename): \Generator
     yield put($startupFilename, $startupsText);
     $restartsCount = count($startups);
     yield $eh->logger("startups: {now:$nowMilli, count0:$startupsCount0, count1:$restartsCount}", Logger::ERROR);
+    return $restartsCount;
+}
+
+function checkTooManyRestarts(string $startupFilename): int
+{
+    $startups = [];
+    if (\file_exists($startupFilename)) {
+        $startupsText = \file_get_contents($startupFilename);
+        $startups = explode('\n', $startupsText);
+    } else {
+        // Create the file
+    }
+
+    $nowMilli = nowMilli();
+    $aMinuteAgo = $nowMilli - 60 * 1000;
+    foreach ($startups as $index => $startupstr) {
+        $startup = intval($startupstr);
+        if ($startup < $aMinuteAgo) {
+            unset($startups[$index]);
+        }
+    }
+    $startups[] = strval($nowMilli);
+    $startupsText = implode('\n', $startups);
+    \file_put_contents($startupFilename, $startupsText);
+    $restartsCount = count($startups);
     return $restartsCount;
 }
 
@@ -886,11 +911,9 @@ function sanityCheck(API $MadelineProto, int $apiCreationStart, int $apiCreation
     $variables['user_agent']          = USER_AGENT;
     $variables['session_file']        = SESSION_FILE;
     $variables['memory_limit']        = MEMORY_LIMIT;
-    //$variables['startups_file']     = STARTUPS_FILE;
-    //$variables['launches_file']     = LAUNCHES_FILE;
-    $variables['script_start_time']   = SCRIPT_START_TIME;
-    $variables['api_creation_start']  = $apiCreationStart;
-    $variables['api_creation_end']    = $apiCreationEnd;
+    $variables['script_start_time']   = formatDuration(SCRIPT_START_TIME * 1000);
+    //$variables['api_creation_start']  = $apiCreationStart;
+    //$variables['api_creation_end']    = $apiCreationEnd;
     $variables['authorization_state'] = getAuthorized(authorized($MadelineProto));
 
     if (!$MadelineProto) {
@@ -902,4 +925,22 @@ function sanityCheck(API $MadelineProto, int $apiCreationStart, int $apiCreation
         $MadelineProto->logger("variables: " . toJSON($variables), Logger::ERROR);
         unset($variables);
     }
+}
+
+function readableMilli(float $time, \DateTimeZone $timeZoneObj, string $format = 'H:i:s.v'): string
+{
+    $dateObj = \DateTimeImmutable::createFromFormat('U.u', number_format($time, 6, '.', ''));
+    $dateObj->setTimeZone($timeZoneObj);
+    return $dateObj->format($format);
+}
+
+function mySqlTime(float $time = null): string
+{
+    $time   = $time ?? \microtime(true);
+    $tzObj  = new \DateTimeZone('gmt');
+    $format = 'Y-m-d H:i:s.u';
+
+    $dateObj = \DateTimeImmutable::createFromFormat('U.u', number_format($time, 6, '.', ''));
+    $dateObj->setTimeZone($tzObj);
+    return $dateObj->format($format);
 }

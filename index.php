@@ -6,12 +6,12 @@ declare(strict_types=1);
 
 namespace teleclient\base;
 
-$scriptStartTime = hrtime(true);
+$scriptStartTime = microtime(true);
 
 require_once 'functions.php';
 include_once 'config.php';
 
-\date_default_timezone_set('Asia/Tehran');
+\date_default_timezone_set('gmt');
 ignore_user_abort(true);
 error_reporting(E_ALL);                                 // always TRUE
 ini_set('ignore_repeated_errors', '1');                 // always TRUE
@@ -19,6 +19,7 @@ ini_set('display_startup_errors', '1');
 ini_set('display_errors',         '1');                 // FALSE only in production or real server
 ini_set('log_errors',             '1');                 // Error logging engine
 ini_set('error_log',              'MadelineProto.log'); // Logging file path
+ini_set('precision',              '18');
 //set_include_path(\get_include_path() . PATH_SEPARATOR . dirname(__DIR__, 1));
 
 define("SCRIPT_NAME",       'Base');
@@ -33,14 +34,12 @@ define('SERVER_NAME',       \makeWebServerName());
 define('REQUEST_URL',       \getURL() ?? '');
 define('USER_AGENT',        $_SERVER['HTTP_USER_AGENT'] ?? '');
 define('MAX_RECYCLES',      5);
+define('MAX_RESTARTS',      5);
 
-//$launch = appendLaunchRecord(LAUNCHES_FILE, SCRIPT_START_TIME);
 error_log('');
 error_log('==========================================================');
 error_log(SCRIPT_NAME . ' ' . SCRIPT_VERSION . ' started at ' . date('H:i:s') . " by " . \getLaunchMethod() . " launch method  using " . \getPeakMemory() . ' memory.');
 error_log('==========================================================');
-//error_log(toJSON($launch));
-//unset($launch);
 
 if (\file_exists('vendor/autoload.php')) {
     require_once 'vendor/autoload.php';
@@ -55,7 +54,6 @@ require_once 'EventHandler.php';
 use \danog\MadelineProto\Logger;
 use \danog\MadelineProto\API;
 use \danog\MadelineProto\Shutdown;
-use \danog\MadelineProto\Tools;
 use \danog\MadelineProto\Magic;
 use \danog\MadelineProto\Loop\Generic\GenericLoop;
 use Amp\Loop;
@@ -66,6 +64,15 @@ Shutdown::addCallback(
     },
     'duration'
 );
+
+$restartsCount = checkTooManyRestarts(LAUNCHES_FILE);
+$nowstr = readableMilli(SCRIPT_START_TIME, new \DateTimeZone('Asia/Tehran'));
+if ($restartsCount > MAX_RESTARTS) {
+    $text = 'More than ' . MAX_RESTARTS . ' times restarted within a minute. Permanently shutting down ....';
+    Logger::log($text, Logger::ERROR);
+    Logger::log(SCRIPT_NAME . ' ' . SCRIPT_VERSION . ' on ' . hostname() . ' is stopping at ' . $nowstr, Logger::ERROR);
+    exit($text . PHP_EOL);
+}
 
 $signal  = null;
 Loop::run(function () use (&$signal) {
@@ -103,7 +110,7 @@ $apiCreationEnd = \hrtime(true);
 Shutdown::addCallback(
     function () use ($MadelineProto, &$signal) {
         echo (PHP_EOL . 'Shutting down ....<br>' . PHP_EOL);
-        $scriptEndTime = \hrtime(true);
+        $scriptEndTime = \microTime(true);
         $stopReason = 'nullapi';
         if ($signal !== null) {
             $stopReason = $signal;
@@ -157,3 +164,5 @@ $genLoop = new GenericLoop(
 );
 
 \safeStartAndLoop($MadelineProto, \teleclient\base\EventHandler::class,  [$genLoop], MAX_RECYCLES);
+
+exit;

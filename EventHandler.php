@@ -14,7 +14,6 @@ use teleclient\base\plugins\VerifyPlugin;
 use teleclient\base\plugins\EmptyPlugin;
 use teleclient\base\plugins\BuiltinPlugin;
 use \danog\MadelineProto\Logger;
-use \danog\MadelineProto\Shutdown;
 use \danog\MadelineProto\APIWrapper;
 use \danog\MadelineProto\EventHandler as MadelineEventHandler;
 use function\Amp\File\{get, put, exists, getSize};
@@ -162,16 +161,6 @@ class EventHandler extends MadelineEventHandler
         $fromAdmin = in_array($fromId, $admins);
 
         // Start the Command Processing Engine based on the date of a received command
-        $params['verb']         = $verb ? $msgText : '_NONE"';
-        $params['from_robot']   = $fromRobot ? 'true' : 'false';
-        $params['from_admin']   = $fromAdmin ? 'true' : 'false';
-        $params['to_robot']     = $toRobot ?   'true' : 'false';
-        $params['to_office']    = $toOffice ?  'true' : 'false';
-        $params['msg_type']     = $msgType;
-        $params['msg_date']     = date('d H:i:s', $msgDate);
-        $params['start_time']   = date('d H:i:s', $startTime);
-        $params['current_time'] = date('d H:i:s');
-        $params['old_execute']  = $this->getProcessCommands() ? 'true' : 'false';
         if (
             $verb && !$processCommands &&
             $msgIsNew && $msgType === 'updateNewMessage' &&
@@ -180,44 +169,6 @@ class EventHandler extends MadelineEventHandler
             $this->processCommands = true;
             $processCommands = $this->getProcessCommands();
             yield $this->logger('Command-Processing engine started at ' . date('d H:i:s'), Logger::ERROR);
-        }
-        $params['new_execute']  = $this->getProcessCommands() ? 'true' : 'false';
-        //yield $this->logger('params: ' . toJSON($params), Logger::ERROR);
-
-        // Recognize and log old or new commands.
-        if (
-            $verb && $msgType === 'updateNewMessage' &&
-            ($fromRobot && ($toRobot || $toOffice) || $fromAdmin && $toOffice)
-        ) {
-            $type   = $msgIsNew  ? 'New' : 'Old';
-            $from   = $fromRobot ? 'robot' : $fromId;
-            $to     = $toRobot   ? 'robot' : 'office';
-            $exec   = $processCommands ? 'true' : 'false';
-            $age    = \formatDuration(\abs($startTime - $msgDate) * 1000000000);
-            $age    = $startTime > $msgDate ? $age : (-1 * $age);
-            $start  = date('H:i:s', $startTime);
-            $now    = date('H:i:s');
-            $issued = date('H:i:s', $msgDate);
-            $text   = "$type Command:{verb:'$msgText', from:$from, to:$to, exec:$exec, age:$age, issued:$issued, start:$start, now:$now}";
-            yield $this->logger($text, Logger::ERROR);
-        }
-
-        // Log some information for debugging
-        if (($fromRobot || $toRobot || $fromAdmin || $toOffice) &&  true) {
-            $from = $fromRobot ? 'robot' : ($fromAdmin ? strval($fromId) : ('?' . strval($fromId) . '?'));
-            $to   =   $toRobot ? 'robot' : ($toOffice ? 'office' : '?' . 'peer' . '?');
-            $criteria = [
-                'from'    => $from,
-                'to'      => $to,
-                'process' => ($this->getProcessCommands() ? 'true' : 'false'),
-                ($verb ? 'action' : 'reaction') => mb_substr($msgText ?? '_NULL_', 0, 40)
-            ];
-            $this->logger(toJSON($criteria, false), Logger::ERROR);
-        }
-        if ($fromAdmin || $toOffice) {
-            $text = "fromAdmin: $fromId, toOffice:" . ($toOffice ? 'true' : 'false');
-            //yield $this->logger("fromId: $fromId, toOffice:" . ($toOffice ? 'true' : 'false'), Logger::ERROR);
-            yield $this->logger(toJSON($update, false), Logger::ERROR);
         }
 
         //yield $this->dispatchEvent($update, $session, $vars);
