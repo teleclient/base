@@ -16,8 +16,10 @@ php_value max_execution_time 0
 #php_value max_input_time 1000
 #php_value error_log  /home/u176105864/domains/webwarp.com/public_html/base/PHP_errors.log
 
-SecFilterEngine   Off
-SecFilterScanPOST Off
+# Uncomment the following three lines for Hostinger
+#SecFilterEngine   Off
+#SecFilterScanPOST Off
+#Header always set Content-Security-Policy: upgrade-insecure-requests
 
 RewriteEngine on
 RewriteRule .* - [E=noconntimeout:1]
@@ -25,5 +27,3 @@ RewriteRule .* - [E=noabort:1]
 #RewriteCond %{HTTPS} off
 #RewriteCond %{HTTP_HOST} (www\.)?tab.webwarp.com
 #RewriteRule (.*) https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
-
-Header always set Content-Security-Policy: upgrade-insecure-requests

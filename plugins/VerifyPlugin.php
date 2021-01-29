@@ -96,16 +96,16 @@ class VerifyPlugin implements Plugin
             $verb && $msgType === 'updateNewMessage' &&
             ($fromRobot && ($toRobot || $toOffice) || $fromAdmin && $toOffice)
         ) {
-            $type   = $msgIsNew  ? 'New' : 'Old';
-            $from   = $fromRobot ? 'robot' : $fromId;
-            $to     = $toRobot   ? 'robot' : 'office';
-            $exec   = $processCommands ? 'true' : 'false';
-            $age    = \formatDuration(\abs($startTime - $msgDate) * 1000000000);
-            $age    = $startTime > $msgDate ? $age : (-1 * $age);
-            $start  = date('H:i:s', $startTime);
-            $now    = date('H:i:s');
-            $issued = date('H:i:s', $msgDate);
-            $text   = "$type Command:{verb:'$msgText', from:$from, to:$to, exec:$exec, age:$age, issued:$issued, start:$start, now:$now}";
+            $type    = $msgIsNew  ? 'New' : 'Old';
+            $from    = $fromRobot ? 'robot' : $fromId;
+            $to      = $toRobot   ? 'robot' : 'office';
+            $execute = $processCommands ? 'true' : 'false';
+            $age     = \formatDuration(\abs($startTime - $msgDate) * 1000000000);
+            $age     = $startTime > $msgDate ? $age : (-1 * $age);
+            $start   = date('H:i:s', $startTime);
+            $now     = date('H:i:s');
+            $issued  = date('H:i:s', $msgDate);
+            $text    = "$type Command:{verb:'$msgText', from:$from, to:$to, execute:$execute, age:$age, issued:$issued, start:$start, now:$now}";
             yield $this->logger($text, Logger::ERROR);
         }
 
@@ -136,7 +136,7 @@ class VerifyPlugin implements Plugin
         $params['msg_date']     = date('d H:i:s', $msgDate);
         $params['start_time']   = date('d H:i:s', $startTime);
         $params['current_time'] = date('d H:i:s');
-        $params['execute']      = $processCommands() ? 'true' : 'false';
+        $params['execute']      = $processCommands ? 'true' : 'false';
         //yield $this->logger('params: ' . toJSON($params), Logger::ERROR);
     }
 }

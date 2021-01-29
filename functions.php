@@ -58,15 +58,24 @@ function formatDuration(int $elapsedNano): string
     $hours = floor($seconds / 3600 % 3600);
     $mins  = floor($seconds / 60 % 60);
     $secs  = floor($seconds % 60);
-    $date = sprintf('%01d %02d:%02d:%02d.%03d', $days, $hours, $mins, $secs, $fracs);
-
-    return $date;
+    return sprintf('%01d %02d:%02d:%02d.%03d', $days, $hours, $mins, $secs, $fracs);
 }
 
-function getUptime(int $start, int $end = 0): string
+function timeDiffFormatted(float $startTime, float $endTime = null): string
 {
-    $end = $end !== 0 ? $end : time();
-    $age     = $end - $start;
+    $endTime = $endTime ?? microtime(true);
+
+    $diff = $endTime - $startTime;
+
+    $sec   = intval($diff);
+    $micro = $diff - $sec;
+    return strftime('%T', mktime(0, 0, $sec)) . str_replace('0.', '.', sprintf('%.3f', $micro));
+}
+
+function getUptime(float $start, float $end = null): string
+{
+    $end = $end !== 0 ? $end : \microtime();
+    $age     = ($end - $start) * 1000000;
     $days    = floor($age  / 86400);
     $hours   = floor(($age / 3600) % 3600);
     $minutes = floor(($age / 60) % 60);
@@ -192,9 +201,10 @@ function strStartsWith(string $haystack, string $needle, bool $caseSensitive = t
     return false;
 }
 
-function secondsToNexMinute($now = null): int
+function secondsToNexMinute(float $now = null): int
 {
-    $now   = $now ?? time();
+    $now   = $now ?? \microtime();
+    $now   = (int) ($now * 1000000);
     $next  = (int)ceil($now / 60) * 60;
     $delay = $next - $now;
     return $delay > 0 ? $delay : 60;
@@ -298,7 +308,7 @@ function parseCommand(?string $msg, string $prefixes = '!/', int $maxParams = 3)
     return $command;
 }
 
-function sendAndDelete(object $eh, int $dest, string $text, int $delaysecs = 30, bool $delmsg = true): Generator
+function sendAndDelete(object $eh, int $dest, string $text, \UserDate $dateObj, int $delaysecs = 30, bool $delmsg = true): Generator
 {
     $result = yield $eh->messages->sendMessage([
         'peer'    => $dest,
@@ -306,14 +316,14 @@ function sendAndDelete(object $eh, int $dest, string $text, int $delaysecs = 30,
     ]);
     if ($delmsg) {
         $msgid = $result['updates'][1]['message']['id'];
-        $eh->callFork((function () use ($eh, $msgid, $delaysecs) {
+        $eh->callFork((function () use ($eh, $msgid, $delaysecs, $dateObj) {
             try {
                 yield $eh->sleep($delaysecs);
                 yield $eh->messages->deleteMessages([
                     'revoke' => true,
                     'id'     => [$msgid]
                 ]);
-                yield $eh->logger('Robot\'s startup message is deleted at ' . time() . '!', Logger::ERROR);
+                yield $eh->logger('Robot\'s startup message is deleted at ' . $dateObj->milli() . '!', Logger::ERROR);
             } catch (\Exception $e) {
                 yield $eh->logger($e, Logger::ERROR);
             }
@@ -327,43 +337,12 @@ function getWebServerName(): ?string
 }
 function setWebServerName(string $serverName): void
 {
-    $_SERVER['SERVER_NAME'] = $serverName;
+    if ($serverName !== '') {
+        $_SERVER['SERVER_NAME'] = $serverName;
+    }
 }
 
-function getPreviousLaunch(object $eh, string $fileName, float $scriptStartTime): \Generator
-{
-    $content = yield get($fileName);
-    if ($content === '') {
-        return null;
-    }
-    $content = substr($content, 1);
-    $lines = explode("\n", $content);
-    yield $eh->logger("Launches Count:" . count($lines), Logger::ERROR);
-    $record = null;
-    $key = strval($scriptStartTime) . ' ';
-    foreach ($lines as $line) {
-        if (strStartsWith($line, $key)) {
-            break;
-        }
-        $record = $line;
-    }
-    if ($record === null) {
-        return null;
-    }
-    $fields = explode(' ', trim($record));
-    if (count($fields) !== 6) {
-        throw new \ErrorException("Invalid launch information .");
-    }
-    $launch['time_start']    = intval($fields[0]);
-    $launch['time_end']      = intval($fields[1]);
-    $launch['launch_method'] = $fields[2];
-    $launch['stop_reason']   = $fields[3];
-    $launch['memory_start']  = intval($fields[4]);
-    $launch['memory_end']    = intval($fields[5]);
-    return $launch;
-}
-
-function appendLaunchRecord(string $fileName, float $scriptStartTime, string $launchMethod, string $stopReason, int $peakMemory): array
+function appendLaunchRecord(object $eh, string $fileName, float $scriptStartTime, string $launchMethod, string $stopReason, int $peakMemory): array
 {
     $record['time_start']    = $scriptStartTime;
     $record['time_end']      = 0;
@@ -408,6 +387,39 @@ function updateLaunchRecord(string $fileName, float $scriptStartTime, float $scr
     file_put_contents($fileName, rtrim($content));
     //yield Amp\File\put($fileName, rtrim($content));
     return $record;
+}
+
+function getPreviousLaunch(object $eh, string $fileName, float $scriptStartTime): \Generator
+{
+    $content = yield get($fileName);
+    if ($content === '') {
+        return null;
+    }
+    $content = substr($content, 1);
+    $lines = explode("\n", $content);
+    yield $eh->logger("Launches Count:" . count($lines), Logger::ERROR);
+    $record = null;
+    $key = strval($scriptStartTime) . ' ';
+    foreach ($lines as $line) {
+        if (strStartsWith($line, $key)) {
+            break;
+        }
+        $record = $line;
+    }
+    if ($record === null) {
+        return null;
+    }
+    $fields = explode(' ', trim($record));
+    if (count($fields) !== 6) {
+        throw new \ErrorException("Invalid launch information .");
+    }
+    $launch['time_start']    = intval($fields[0]);
+    $launch['time_end']      = intval($fields[1]);
+    $launch['launch_method'] = $fields[2];
+    $launch['stop_reason']   = $fields[3];
+    $launch['memory_start']  = intval($fields[4]);
+    $launch['memory_end']    = intval($fields[5]);
+    return $launch;
 }
 
 /*
@@ -826,8 +838,7 @@ function respond(object $eh, array $peer, int $msgId, string $text, $editMessage
     return $result;
 }
 
-
-function safeStartAndLoop(API $mp, string $eventHandler, array $genLoops, int $maxRecycles): void
+function safeStartAndLoop(API $mp, string $eventHandler, array $genLoops): void
 {
     $mp->async(true);
     $mp->loop(function () use ($mp, $eventHandler, $genLoops) {
@@ -835,8 +846,10 @@ function safeStartAndLoop(API $mp, string $eventHandler, array $genLoops, int $m
         while (true) {
             try {
                 $started = false;
-                yield $mp->start();
+                $me = yield $mp->start();
                 yield $mp->setEventHandler($eventHandler);
+                $eventHandlerObj = $mp->getEventHandler($eventHandler);
+                $eventHandlerObj->setSelf($me);
                 foreach ($genLoops as $genLoop) {
                     $genLoop->start(); // Do NOT use yield.
                 }
@@ -900,20 +913,18 @@ function makeWebServerName(): ?string
     return $webServerName;
 }
 
-function sanityCheck(API $MadelineProto, int $apiCreationStart, int $apiCreationEnd): void
+function sanityCheck(API $MadelineProto, object $config, \UserDate $dateObj): void
 {
     $variables['script_name']         = SCRIPT_NAME;
     $variables['script_version']      = SCRIPT_VERSION;
     $variables['os_family']           = PHP_OS_FAMILY;
     $variables['php_version']         = PHP_VERSION;
-    $variables['server_name']         = SERVER_NAME;
+    $variables['server_name']         = \getWebServerName();
     $variables['request_url']         = REQUEST_URL;
     $variables['user_agent']          = USER_AGENT;
-    $variables['session_file']        = SESSION_FILE;
     $variables['memory_limit']        = MEMORY_LIMIT;
-    $variables['script_start_time']   = formatDuration(SCRIPT_START_TIME * 1000);
-    //$variables['api_creation_start']  = $apiCreationStart;
-    //$variables['api_creation_end']    = $apiCreationEnd;
+    $variables['session_file']        = $config->mp0->session;
+    $variables['script_start_time']   = $dateObj->milli(SCRIPT_START_TIME);
     $variables['authorization_state'] = getAuthorized(authorized($MadelineProto));
 
     if (!$MadelineProto) {
@@ -927,6 +938,12 @@ function sanityCheck(API $MadelineProto, int $apiCreationStart, int $apiCreation
     }
 }
 
+function getUserAgent(): ?string
+{
+    return $_SERVER['HTTP_USER_AGENT'] ?? null;
+}
+
+/*
 function readableMilli(float $time, \DateTimeZone $timeZoneObj, string $format = 'H:i:s.v'): string
 {
     $dateObj = \DateTimeImmutable::createFromFormat('U.u', number_format($time, 6, '.', ''));
@@ -943,4 +960,33 @@ function mySqlTime(float $time = null): string
     $dateObj = \DateTimeImmutable::createFromFormat('U.u', number_format($time, 6, '.', ''));
     $dateObj->setTimeZone($tzObj);
     return $dateObj->format($format);
+}
+*/
+
+class UserDate
+{
+    private $timeZoneObj;
+
+    function __construct(string $zone)
+    {
+        $this->timeZoneObj = new \DateTimeZone($zone);
+    }
+
+    public function milli(float $time = null, string $format = 'H:i:s.v'): string
+    {
+        $time   = $time ?? \microtime(true);
+        $dateObj = \DateTimeImmutable::createFromFormat('U.u', number_format($time, 6, '.', ''));
+        $dateObj->setTimeZone($this->timeZoneObj);
+        return $dateObj->format($format);
+    }
+
+    function mySqlmicro(float $time = null): string
+    {
+        $time   = $time ?? \microtime(true);
+        $format = 'Y-m-d H:i:s.u';
+
+        $dateObj = \DateTimeImmutable::createFromFormat('U.u', number_format($time, 6, '.', ''));
+        $dateObj->setTimeZone($this->timeZoneObj);
+        return $dateObj->format($format);
+    }
 }

@@ -10,6 +10,8 @@ include __DIR__ .   "/plugins/EmptyPlugin.php";
 include __DIR__ . "/plugins/WelcomePlugin.php";
 include __DIR__ . "/plugins/BuiltinPlugin.php";
 
+$config = include("config.php");
+
 use teleclient\base\plugins\VerifyPlugin;
 use teleclient\base\plugins\EmptyPlugin;
 use teleclient\base\plugins\BuiltinPlugin;
@@ -20,16 +22,15 @@ use function\Amp\File\{get, put, exists, getSize};
 
 class EventHandler extends MadelineEventHandler
 {
-    public static $userSelf;
-    public static  $botSelf;
-
     public  $verifyPlugin;
     public   $emptyPlugin;
     public $welcomePlugin;
     public $builtinPlugin;
 
+    private $config;
     private $startTime;
-    private $stopTime;
+    private  $stopTime;
+    private $dateObj;
 
     private $robotId;     // id of this worker.
     private $robotName;   // username, firstname, or the id of the robot.
@@ -54,14 +55,15 @@ class EventHandler extends MadelineEventHandler
         $this->welcomePlugin = new   EmptyPlugin($this);
         $this->builtinPlugin = new BuiltinPlugin($this);
 
-        $this->startTime       = time();
+        $this->startTime       = microtime();
         $this->stopTime        = 0;
+        $this->dateObj         = null; // new \UserDate($config->zone);
         $this->stopReason      = 'UNKNOWN';
         $this->processCommands = false;
         $this->officeId        = 1373853876;
     }
 
-    public function __magic_sleep()
+    public function __sleep()
     {
         return [];
     }
@@ -73,13 +75,14 @@ class EventHandler extends MadelineEventHandler
     {
         $launchMethod = \getLaunchMethod();
         $peakMemory   = \getPeakMemory();
-        $launch       = \appendLaunchRecord(LAUNCHES_FILE, SCRIPT_START_TIME, $launchMethod, 'kill', $peakMemory);
-        yield $this->logger("Event Handler instantiated at " . date('d H:i:s', $this->getStartTime()) . "using $peakMemory!", Logger::ERROR);
+        $dateStr      = date('d H:i:s', $this->getStartTime());
+        $launch       = \appendLaunchRecord($this, LAUNCHES_FILE, SCRIPT_START_TIME, $launchMethod, 'kill', $peakMemory);
+        yield $this->logger("Event Handler instantiated at $dateStr using $peakMemory!", Logger::ERROR);
         yield $this->logger(toJSON($launch), Logger::ERROR);
         unset($launch);
 
         $robot = yield $this->getSelf();
-        if (!\is_array($robot)) {
+        if (!\is_array($robot) || !isset($robot['id']) || $robot['id'] === null) {
             throw new \Exception("Self is not available!");
         }
         $this->robotId = $robot['id'];
@@ -134,7 +137,8 @@ class EventHandler extends MadelineEventHandler
     }
     public function onUpdateNewMessage(array $update): \Generator
     {
-        $session = SESSION_FILE;
+        $session = $this->session;
+        yield $this->echo($session . PHP_EOL);
         $command = \parseCommand($update['message']['message'] ?? null);
         $vars    = ['command' => $command];
 
@@ -211,19 +215,32 @@ class EventHandler extends MadelineEventHandler
         return false;
     }
 
-    public function getRobotID(): int
+    public function setConfig(object $config): void
     {
-        return $this->robotId;
+        $this->config = $config;
     }
 
-    public function getStartTime(): int
+    public function setSelf(EventHandler $self): void
     {
-        return $this->startTime;
+        $this->robotId = $self['id'];
+    }
+
+    public function getRobotId(): int
+    {
+        if ($this->robotId === null || $this->robotId <= 0) {
+            throw new \ErrorException('Invalid robotId');
+        }
+        return $this->robotId;
     }
 
     public function getOfficeId(): int
     {
         return $this->officeId;
+    }
+
+    public function getStartTime(): float
+    {
+        return $this->startTime;
     }
 
     public function getProcessCommands(): bool

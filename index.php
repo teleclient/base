@@ -6,40 +6,40 @@ declare(strict_types=1);
 
 namespace teleclient\base;
 
-$scriptStartTime = microtime(true);
+use \danog\MadelineProto\Logger;
+use \danog\MadelineProto\API;
+use \danog\MadelineProto\Shutdown;
+use \danog\MadelineProto\Magic;
+use \danog\MadelineProto\Loop\Generic\GenericLoop;
+use Amp\Loop;
+use function\Amp\File\{get, put, exists, getSize};
 
 require_once 'functions.php';
-include_once 'config.php';
 
-\date_default_timezone_set('gmt');
-ignore_user_abort(true);
-error_reporting(E_ALL);                                 // always TRUE
+\date_default_timezone_set('UTC');
+\ignore_user_abort(true);
+\error_reporting(E_ALL);                                 // always TRUE
+ini_set('max_execution_time',     '0');
 ini_set('ignore_repeated_errors', '1');                 // always TRUE
 ini_set('display_startup_errors', '1');
 ini_set('display_errors',         '1');                 // FALSE only in production or real server
 ini_set('log_errors',             '1');                 // Error logging engine
 ini_set('error_log',              'MadelineProto.log'); // Logging file path
 ini_set('precision',              '18');
-//set_include_path(\get_include_path() . PATH_SEPARATOR . dirname(__DIR__, 1));
 
 define("SCRIPT_NAME",       'Base');
 define("SCRIPT_VERSION",    'V2.0.0');
-define('SESSION_FILE',      'session.madeline');
-define("SCRIPT_START_TIME", $scriptStartTime);
+define("SCRIPT_START_TIME", \microtime(true));
+define("MEMORY_LIMIT",      \ini_get('memory_limit'));
+define('REQUEST_URL',       \getURL() ?? '');
+define('USER_AGENT',        \getUserAgent() ?? '');
 define("DATA_DIRECTORY",    \makeDataDirectory('data'));
 define("STARTUPS_FILE",     \makeDataFile(DATA_DIRECTORY, 'startups.txt'));
 define("LAUNCHES_FILE",     \makeDataFile(DATA_DIRECTORY, 'launches.txt'));
-define("MEMORY_LIMIT",      ini_get('memory_limit'));
-define('SERVER_NAME',       \makeWebServerName());
-define('REQUEST_URL',       \getURL() ?? '');
-define('USER_AGENT',        $_SERVER['HTTP_USER_AGENT'] ?? '');
-define('MAX_RECYCLES',      5);
-define('MAX_RESTARTS',      5);
-
-error_log('');
-error_log('==========================================================');
-error_log(SCRIPT_NAME . ' ' . SCRIPT_VERSION . ' started at ' . date('H:i:s') . " by " . \getLaunchMethod() . " launch method  using " . \getPeakMemory() . ' memory.');
-error_log('==========================================================');
+//define('SESSION_FILE',      'session.madeline');
+//define('SERVER_NAME',       \makeWebServerName());
+//define('USER_TIME_ZONE',    'Asia/Tehran');
+//define('MAX_RECYCLES',      5);
 
 if (\file_exists('vendor/autoload.php')) {
     require_once 'vendor/autoload.php';
@@ -49,29 +49,32 @@ if (\file_exists('vendor/autoload.php')) {
     }
     require_once 'madeline.php';
 }
+$config = include('config.php');
 require_once 'EventHandler.php';
+$dateObj = new \UserDate($config->zone);
 
-use \danog\MadelineProto\Logger;
-use \danog\MadelineProto\API;
-use \danog\MadelineProto\Shutdown;
-use \danog\MadelineProto\Magic;
-use \danog\MadelineProto\Loop\Generic\GenericLoop;
-use Amp\Loop;
-use function\Amp\File\{get, put, exists, getSize};
-
-Shutdown::addCallback(
-    static function (): void {
-    },
-    'duration'
-);
+error_log('');
+error_log('==========================================================');
+error_log(SCRIPT_NAME . ' ' . SCRIPT_VERSION . ' started at ' . $dateObj->milli(SCRIPT_START_TIME) . " by " . \getLaunchMethod() . " launch method  using " . \getPeakMemory() . ' memory.');
+error_log('==========================================================');
 
 $restartsCount = checkTooManyRestarts(LAUNCHES_FILE);
-$nowstr = readableMilli(SCRIPT_START_TIME, new \DateTimeZone('Asia/Tehran'));
-if ($restartsCount > MAX_RESTARTS) {
-    $text = 'More than ' . MAX_RESTARTS . ' times restarted within a minute. Permanently shutting down ....';
+if ($restartsCount > $config->maxrestarts) {
+    $text = 'More than ' . $config->maxrestarts . ' times restarted within a minute. Permanently shutting down ....';
     Logger::log($text, Logger::ERROR);
-    Logger::log(SCRIPT_NAME . ' ' . SCRIPT_VERSION . ' on ' . hostname() . ' is stopping at ' . $nowstr, Logger::ERROR);
+    Logger::log(SCRIPT_NAME . ' ' . SCRIPT_VERSION . ' on ' . hostname() . ' is stopping at ' . $dateObj->milli(SCRIPT_START_TIME), Logger::ERROR);
     exit($text . PHP_EOL);
+}
+
+if (PHP_SAPI !== 'cli') {
+    if (!\getWebServerName()) {
+        \setWebServerName($config->host);
+        if (!\getWebServerName()) {
+            $text = "To enable the restart, the config->host must be defined!";
+            echo ($text . PHP_EOL);
+            error_log($text);
+        }
+    }
 }
 
 $signal  = null;
@@ -93,6 +96,13 @@ Loop::run(function () use (&$signal) {
     }
 });
 
+Shutdown::addCallback(
+    static function (): void {
+    },
+    'duration'
+);
+
+/*
 $settings['app_info']['api_id']   = 904912; //6;                                  // <== Use your own, or let MadelineProto ask you.
 $settings['app_info']['api_hash'] = '8208f08eefc502bedea8b5d437be898e'; // "eb06d4abfb49dc3eeb1aeb98ae0f581e"; // <== Use your own, or let MadelineProto ask you.
 $settings['logger']['logger_level'] = Logger::ERROR;
@@ -101,11 +111,12 @@ $settings['peer']['full_info_cache_time'] = 60;
 $settings['serialization']['cleanup_before_serialization'] = true;
 $settings['app_info']['app_version']    = SCRIPT_NAME . ' ' . SCRIPT_VERSION;
 $settings['app_info']['system_version'] =  \hostname() . ' ' . PHP_SAPI === 'cli' ? 'CLI' : "WEB";
+*/
 
 $apiCreationStart = \hrtime(true);
-$MadelineProto = new API(SESSION_FILE, $settings);
-$apiCreationEnd = \hrtime(true);
-\sanityCheck($MadelineProto, $apiCreationStart, $apiCreationEnd);
+$MadelineProto    = new API($config->mp0->session, $config->mp0->settings);
+$apiCreationEnd   = \hrtime(true);
+\sanityCheck($MadelineProto, $config, $dateObj);
 
 Shutdown::addCallback(
     function () use ($MadelineProto, &$signal) {
@@ -125,7 +136,7 @@ Shutdown::addCallback(
                 $stopReason = 'sigterm';
             }
         }
-        $duration = \formatDuration($scriptEndTime - SCRIPT_START_TIME);
+        $duration = \timeDiffFormatted($scriptEndTime, SCRIPT_START_TIME);
         $peakMemory = \getPeakMemory();
         $record   = \updateLaunchRecord(LAUNCHES_FILE, SCRIPT_START_TIME, $scriptEndTime, $stopReason, $peakMemory);
         Logger::log(toJSON($record), Logger::ERROR);
@@ -137,15 +148,15 @@ Shutdown::addCallback(
 
 $genLoop = new GenericLoop(
     $MadelineProto,
-    function () use ($MadelineProto) {
+    function () use ($MadelineProto, $dateObj) {
         $eventHandler = $MadelineProto->getEventHandler();
-        $now = time();
+        $now = $dateObj->milli();
         if ($eventHandler->getLoopState() && $now % 60 === 0) {
-            $msg = 'Time is ' . date('H:i:s', $now) . '!';
+            $msg = 'Time is ' . $now . '!';
             yield $MadelineProto->logger($msg, Logger::ERROR);
             if (false) {
                 yield $MadelineProto->account->updateProfile([
-                    'about' => date('H:i:s', $now)
+                    'about' => $now
                 ]);
             }
             if (false) {
@@ -163,6 +174,6 @@ $genLoop = new GenericLoop(
     'Repeating Loop'
 );
 
-\safeStartAndLoop($MadelineProto, \teleclient\base\EventHandler::class,  [$genLoop], MAX_RECYCLES);
+\safeStartAndLoop($MadelineProto, \teleclient\base\EventHandler::class, [$genLoop]);
 
 exit;

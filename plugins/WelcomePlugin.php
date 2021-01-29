@@ -9,10 +9,6 @@ use teleclient\base\plugins\Plugin;
 
 class WelcomePlugin implements Plugin
 {
-    public function __construct()
-    {
-    }
-
     public function onStart(string $session, EventHandler $eh): \Generator
     {
         return;   // Comment out if you wish!

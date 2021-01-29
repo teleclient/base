@@ -14,10 +14,6 @@ class BuiltinPlugin implements Plugin
 {
     private $totalUpdates;
 
-    public function __construct()
-    {
-    }
-
     public function onStart(string $session, EventHandler $eh): \Generator
     {
         $this->totalUpdates = 0;
