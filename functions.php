@@ -838,10 +838,10 @@ function respond(object $eh, array $peer, int $msgId, string $text, $editMessage
     return $result;
 }
 
-function safeStartAndLoop(API $mp, string $eventHandler, array $genLoops): void
+function safeStartAndLoop(API $mp, string $eventHandler, object $config, array $genLoops): void
 {
     $mp->async(true);
-    $mp->loop(function () use ($mp, $eventHandler, $genLoops) {
+    $mp->loop(function () use ($mp, $eventHandler, $config, $genLoops) {
         $errors = [];
         while (true) {
             try {
@@ -849,6 +849,7 @@ function safeStartAndLoop(API $mp, string $eventHandler, array $genLoops): void
                 $me = yield $mp->start();
                 yield $mp->setEventHandler($eventHandler);
                 $eventHandlerObj = $mp->getEventHandler($eventHandler);
+                $eventHandlerObj->setConfig($config);
                 $eventHandlerObj->setSelf($me);
                 foreach ($genLoops as $genLoop) {
                     $genLoop->start(); // Do NOT use yield.

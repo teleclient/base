@@ -208,4 +208,34 @@ class WelcomePlugin implements Plugin
         }
         return $isNew;
     }
+
+    private function newVisitor2(object $eh, array $update, int $selfId): \Generator
+    {
+        $message  = $update['message'] ?? null;
+        $fromId   = $update['message']['from_id'] ?? null;
+        $peerType = $update['message']['to_id']['_'] ?? null;
+        $peer     = $update['message']['to_id'] ?? null;
+        $toSelf   = $peerType === 'peerUser' && $peer['user_id'] === $selfId;
+        if ($message && $fromId && $toSelf) {
+            $peerDialogs =  yield $eh->messages->getPeerDialogs([
+                'peers' => [$fromId]
+            ]);
+            $dialog = $peerDialogs['dialogs'][0] ?? null;
+            if ($dialog && $dialog['read_outbox_max_id'] === 0) {
+                return $fromId;
+            }
+        }
+        return null;
+    }
+
+    private function newVisitorId(array $dialog): ?int
+    {
+        if (!$dialog || $dialog['_'] !== 'dialog') {
+            throw new \Exception('Invalid argument!');
+        }
+        if ($dialog['peer']['_'] === 'peerUser' && $dialog['read_outbox_max_id'] === 0) {
+            return $dialog['peer']['user_id'];
+        }
+        return null;
+    }
 }

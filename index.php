@@ -36,10 +36,6 @@ define('USER_AGENT',        \getUserAgent() ?? '');
 define("DATA_DIRECTORY",    \makeDataDirectory('data'));
 define("STARTUPS_FILE",     \makeDataFile(DATA_DIRECTORY, 'startups.txt'));
 define("LAUNCHES_FILE",     \makeDataFile(DATA_DIRECTORY, 'launches.txt'));
-//define('SESSION_FILE',      'session.madeline');
-//define('SERVER_NAME',       \makeWebServerName());
-//define('USER_TIME_ZONE',    'Asia/Tehran');
-//define('MAX_RECYCLES',      5);
 
 if (\file_exists('vendor/autoload.php')) {
     require_once 'vendor/autoload.php';
@@ -54,9 +50,9 @@ require_once 'EventHandler.php';
 $dateObj = new \UserDate($config->zone);
 
 error_log('');
-error_log('==========================================================');
-error_log(SCRIPT_NAME . ' ' . SCRIPT_VERSION . ' started at ' . $dateObj->milli(SCRIPT_START_TIME) . " by " . \getLaunchMethod() . " launch method  using " . \getPeakMemory() . ' memory.');
-error_log('==========================================================');
+error_log('====================================================================');
+error_log(SCRIPT_NAME . ' ' . SCRIPT_VERSION . ' started at ' . $dateObj->milli(SCRIPT_START_TIME) . " by " . \getLaunchMethod() . " launch method using " . \getPeakMemory() . ' memory.');
+error_log('====================================================================');
 
 $restartsCount = checkTooManyRestarts(LAUNCHES_FILE);
 if ($restartsCount > $config->maxrestarts) {
@@ -102,21 +98,14 @@ Shutdown::addCallback(
     'duration'
 );
 
-/*
-$settings['app_info']['api_id']   = 904912; //6;                                  // <== Use your own, or let MadelineProto ask you.
-$settings['app_info']['api_hash'] = '8208f08eefc502bedea8b5d437be898e'; // "eb06d4abfb49dc3eeb1aeb98ae0f581e"; // <== Use your own, or let MadelineProto ask you.
-$settings['logger']['logger_level'] = Logger::ERROR;
-$settings['logger']['logger'] = Logger::FILE_LOGGER;
-$settings['peer']['full_info_cache_time'] = 60;
-$settings['serialization']['cleanup_before_serialization'] = true;
-$settings['app_info']['app_version']    = SCRIPT_NAME . ' ' . SCRIPT_VERSION;
-$settings['app_info']['system_version'] =  \hostname() . ' ' . PHP_SAPI === 'cli' ? 'CLI' : "WEB";
-*/
+//$settings = $config->mp0->settings;
+//var_export($settings);
 
 $apiCreationStart = \hrtime(true);
 $MadelineProto    = new API($config->mp0->session, $config->mp0->settings);
 $apiCreationEnd   = \hrtime(true);
 \sanityCheck($MadelineProto, $config, $dateObj);
+
 
 Shutdown::addCallback(
     function () use ($MadelineProto, &$signal) {
@@ -174,6 +163,6 @@ $genLoop = new GenericLoop(
     'Repeating Loop'
 );
 
-\safeStartAndLoop($MadelineProto, \teleclient\base\EventHandler::class, [$genLoop]);
+\safeStartAndLoop($MadelineProto, \teleclient\base\EventHandler::class, $config, [$genLoop]);
 
 exit;
