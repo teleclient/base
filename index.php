@@ -1,6 +1,6 @@
 <?php
 
-// Ask your questions in the MadelineProto [FA] support group.
+// For suppurt, contact @WebWarp (http://t.me/webwarp)
 
 declare(strict_types=1);
 
