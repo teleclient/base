@@ -73,7 +73,7 @@ class EventHandler extends MadelineEventHandler
             yield $this->stop();
             return;
         }
-        $text = SCRIPT_NAME . ' ' . SCRIPT_VERSION . ' started at ' . $nowstr . ' on ' . hostName() . ' using ' . $this->account . ' account.';
+        $text = SCRIPT_INFO . ' started at ' . $nowstr . ' on ' . hostName() . ' using ' . $this->account . ' account.';
 
         $notif      = $this->getNotif();
         $notifState = $notif['state'];

@@ -12,8 +12,7 @@ ini_set('display_errors',         '1');               // FALSE only in productio
 ini_set('log_errors',             '1');               // Error logging engine
 ini_set('error_log',              'MadelineProto.log'); // Logging file path
 
-define("SCRIPT_NAME",    'Base');
-define("SCRIPT_VERSION", 'V1.2.2');
+define("SCRIPT_INFO",    'Base V1.2.4');
 define('SESSION_FILE',   'session.madeline');
 define('SERVER_NAME',    '');
 define('SAPI_NAME', (PHP_SAPI === 'cli') ? (isset($_SERVER['TERM']) ? 'Shell' : 'Cron') : 'Web');
@@ -21,18 +20,12 @@ define('SAPI_NAME', (PHP_SAPI === 'cli') ? (isset($_SERVER['TERM']) ? 'Shell' : 
 use \danog\MadelineProto\Logger;
 use \danog\MadelineProto\API;
 use \danog\MadelineProto\Shutdown;
+use \danog\MadelineProto\Tools;
 use \danog\MadelineProto\Loop\Generic\GenericLoop;
 use function\Amp\File\{get, put, exists, getSize};
 
-if (\file_exists('vendor/autoload.php')) {
-    require_once 'vendor/autoload.php';
-} else {
-    if (!\file_exists('madeline.php')) {
-        \copy('https://phar.madelineproto.xyz/madeline.php', 'madeline.php');
-    }
-    require_once 'madeline.php';
-}
 require_once 'functions.php';
+includeMadeline('phar');
 require_once 'EventHandler.php';
 
 if (PHP_SAPI !== 'cli') {
@@ -82,11 +75,14 @@ $settings['app_info']['app_version']    = SCRIPT_NAME . ' ' . SCRIPT_VERSION;
 $settings['app_info']['system_version'] =  hostname() . ' ' . PHP_SAPI === 'cli' ? 'CLI' : "WEB";
 $MadelineProto = new API(SESSION_FILE, $settings);
 if (!$MadelineProto) {
+    echo ('Strange! MadelineProto object is null. exiting ....' . PHP_EOL);
     Logger::log("Strange! MadelineProto object is null. exiting ....", Logger::ERROR);
     exit("Unsuccessful MadelineProto Object creation.");
 }
-$MadelineProto->logger("API object created! Authorization Status: " . getAuthorized(authorized($MadelineProto)), Logger::ERROR);
 $MadelineProto->async(true);
+$oldInstance = Tools::getVar($MadelineProto, 'oldInstance');
+Logger::log($oldInstance ? ' Existing Session!' : 'New Session!',  Logger::ERROR);
+Logger::log("API object created! Authorization Status: " . getAuthorized(authorized($MadelineProto)), Logger::ERROR);
 
 $genLoop = new GenericLoop(
     $MadelineProto,
@@ -116,9 +112,6 @@ $genLoop = new GenericLoop(
     'Repeating Loop'
 );
 
-//$robotName    = SCRIPT_NAME;
-//$startTime    = \time();
-//$launchesFile = \realpath('data/launches.txt');
 $tempId = Shutdown::addCallback(
     static function () use ($MadelineProto, $robotName, $startTime, $launchesFile) {
         $now          = time();

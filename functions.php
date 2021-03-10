@@ -117,6 +117,27 @@ function hostName(bool $full = false): string
     return $name;
 }
 
+function includeMadeline(string $source = 'phar', string $param = null)
+{
+    switch ($source) {
+        case 'phar':
+            if (!\file_exists('madeline.php')) {
+                \copy('https://phar.madelineproto.xyz/madeline.php', 'madeline.php');
+            }
+            if ($param) {
+                define('MADELINE_BRANCH', $param);
+            }
+            include 'madeline.php';
+            break;
+        case 'composer':
+            $prefix = !$param ? '' : ($param . '/');
+            include $prefix . 'vendor/autoload.php';
+            break;
+        default:
+            throw new \ErrorException("Invalid argument: '$source'");
+    }
+}
+
 function strStartsWith($haystack, $needle, $caseSensitive = true)
 {
     $length = strlen($needle);
@@ -195,9 +216,9 @@ class ArrayInt64
 }
 
 
-function authorized($api): int
+function authorized(object $api): int
 {
-    return $api->API->authorized;
+    return !isset($api->API) ? -2 : $api->API->authorized;
 }
 function getAuthorized(int $authorized): string
 {
@@ -212,6 +233,8 @@ function getAuthorized(int $authorized): string
             return 'WAITING_PASSWORD';
         case -1:
             return 'WAITING_SIGNUP';
+        case -2:
+            return 'UNINSTANTIATED_MTPROTO';
         default:
             throw new Exception("Invalid authorization status: $authorized");
     }
